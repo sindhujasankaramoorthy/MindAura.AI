@@ -1,0 +1,115 @@
+# ========================
+# Python
+# ========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+*.whl
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env/
+
+# ========================
+# Node / React Native
+# ========================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.expo/
+*.tsbuildinfo
+
+# ========================
+# AI / ML Models
+# ========================
+*.pt
+*.pth
+*.bin
+*.onnx
+*.safetensors
+*.h5
+models/
+checkpoints/
+
+# ========================
+# Hugging Face Cache
+# ========================
+.cache/
+huggingface/
+
+# ========================
+# Environment & Secrets
+# ========================
+.env
+.env.local
+.env.production
+*.pem
+*.key
+secrets.yaml
+secrets.json
+
+# ========================
+# IDE & Editors
+# ========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# ========================
+# OS Files
+# ========================
+.DS_Store
+Thumbs.db
+desktop.ini
+*.tmp
+*.bak
+
+# ========================
+# Logs
+# ========================
+*.log
+logs/
+
+# ========================
+# Database
+# ========================
+*.sqlite3
+*.db
+
+# ========================
+# Docker
+# ========================
+docker-compose.override.yml
+
+# ========================
+# Testing & Coverage
+# ========================
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+coverage.xml
+*.cover
+
+# ========================
+# Misc
+# ========================
+*.pickle
+*.pkl
+test_nllb.py
