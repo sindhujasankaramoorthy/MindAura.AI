@@ -157,7 +157,7 @@ Engineered psychological features are supplied as structured context to Qwen, wh
 
 ### 1. Clone the repository
 ```bash
-git clone <repository-url>
+git clone https://github.com/sindhujasankaramoorthy/MindAura.AI.git
 cd MindAura
 ```
 
