@@ -130,7 +130,8 @@ if __name__ == "__main__":
 
     print("\n" + "=" * 60)
     print("   MindAura - Psychiatric Emotional Interpretation (Qwen)")
-    print("   Write a journal entry below.")
+    print("   Paste or type a multi-line journal entry below.")
+    print("   Press Enter twice (empty line) or type END to submit.")
     print("   Type 'exit' or 'quit' to stop.")
     print("=" * 60)
 
@@ -142,7 +143,25 @@ if __name__ == "__main__":
 
     while True:
         print()
-        user_input = input("📝 Enter patient journal text: ").strip()
+        print("📝 Enter patient journal (empty line or END to submit):")
+
+        # Collect multiple lines into a single journal string.
+        # Stops when the user enters an empty line (double Enter) or types END.
+        journal_lines = []
+        while True:
+            try:
+                line = input()
+            except EOFError:
+                # Support piped / redirected input
+                break
+            if line.strip().upper() == "END":
+                break
+            if line == "" and journal_lines:
+                # Empty line after at least one line of content → end of entry
+                break
+            journal_lines.append(line)
+
+        user_input = "\n".join(journal_lines).strip()
 
         if user_input.lower() in ("exit", "quit"):
             print("\nGoodbye! 💙")

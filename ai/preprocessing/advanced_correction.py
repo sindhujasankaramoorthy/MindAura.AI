@@ -265,6 +265,20 @@ class EmotionPreservingCorrector:
             logger.error(f"Failed to load MLM for context evaluation: {e}")
             self._has_context_model = False
 
+        # IndicTrans2 Model
+        try:
+            from transformers import AutoModelForSeq2SeqLM
+            from IndicTransToolkit import IndicProcessor
+            indic_model_name = "ai4bharat/indictrans2-indic-en-1B"
+            self.indic_tokenizer = AutoTokenizer.from_pretrained(indic_model_name, trust_remote_code=True)
+            self.indic_model = AutoModelForSeq2SeqLM.from_pretrained(indic_model_name, trust_remote_code=True)
+            self.indic_model.eval()
+            self.indic_processor = IndicProcessor(inference=True)
+            self._has_indic_model = True
+        except Exception as e:
+            logger.error(f"Failed to load IndicTrans2 model: {e}")
+            self._has_indic_model = False
+
         # NER Protection Layer
         try:
             from ai.preprocessing.ner_protection import NERProtection
@@ -288,6 +302,36 @@ class EmotionPreservingCorrector:
         with torch.no_grad():
             outputs = self.mlm_model(inputs['input_ids'], labels=inputs['input_ids'])
             return outputs.loss.item() * inputs['input_ids'].size(1)
+
+    def translate_indic(self, text: str, src_lang: str) -> str:
+        if not self._has_indic_model:
+            return text
+        
+        lang_map = {
+            'ta': 'tam_Taml', 'hi': 'hin_Deva', 'te': 'tel_Telu', 
+            'ml': 'mal_Mlym', 'kn': 'kan_Knda', 'bn': 'ben_Beng', 
+            'mr': 'mar_Deva', 'gu': 'guj_Gujr', 'pa': 'pan_Guru', 
+            'ur': 'urd_Arab'
+        }
+        reverse_map = {
+            'TAMIL': 'tam_Taml', 'HINDI': 'hin_Deva', 'TELUGU': 'tel_Telu',
+            'MALAYALAM': 'mal_Mlym', 'KANNADA': 'kan_Knda', 'BENGALI': 'ben_Beng',
+            'MARATHI': 'mar_Deva', 'GUJARATI': 'guj_Gujr', 'PUNJABI': 'pan_Guru',
+            'URDU': 'urd_Arab'
+        }
+        mapped_src = lang_map.get(src_lang) or reverse_map.get(src_lang, 'hin_Deva')
+
+        tgt_lang = "eng_Latn"
+        try:
+            batch = self.indic_processor.preprocess_batch([text], src_lang=mapped_src, tgt_lang=tgt_lang)
+            inputs = self.indic_tokenizer(batch, padding="longest", truncation=True, max_length=512, return_tensors="pt")
+            with torch.no_grad():
+                outputs = self.indic_model.generate(**inputs, max_new_tokens=512)
+            decoded = self.indic_tokenizer.batch_decode(outputs, skip_special_tokens=True)
+            return self.indic_processor.postprocess_batch(decoded, lang=tgt_lang)[0]
+        except Exception as e:
+            logger.error(f"Indic translation error: {e}")
+            return text
 
     def recover_negations(self, text: str) -> str:
         processed = text
@@ -423,11 +467,74 @@ class EmotionPreservingCorrector:
                 corrected = self.correct_tanglish_token(word)
                 candidate_options.append([corrected])
 
+            # 4. Indian Language — defer translation: store a sentinel tuple so
+            # consecutive Indic tokens can be grouped and translated together
+            # as a single string (preserving sentence context for IndicTrans2).
+            elif lang in ['TAMIL', 'HINDI', 'TELUGU', 'MALAYALAM', 'KANNADA',
+                          'BENGALI', 'MARATHI', 'GUJARATI', 'PUNJABI', 'URDU']:
+                candidate_options.append([(word, lang, True)])
+
+        # ── Indic Chunk Translation ─────────────────────────────────────────
+        # Group consecutive Indic-sentinel entries (including any UNKNOWN
+        # delimiter entries between them) into chunks and translate each chunk
+        # as a single string so IndicTrans2 receives full sentence context
+        # instead of isolated words.
+        merged_options: list = []
+        i = 0
+        while i < len(candidate_options):
+            slot = candidate_options[i]
+
+            # Detect an Indic sentinel slot
+            if (slot and isinstance(slot[0], tuple) and
+                    len(slot[0]) == 3 and slot[0][2] is True):
+                chunk_lang = slot[0][1]
+                chunk_parts: list = [slot[0][0]]  # first Indic word
+                j = i + 1
+
+                # Absorb subsequent slots that are either:
+                #   a) another Indic token of the SAME language, or
+                #   b) a pure delimiter (UNKNOWN) that sits between Indic tokens
+                #      of the same language (preserves spaces/punctuation).
+                while j < len(candidate_options):
+                    next_slot = candidate_options[j]
+
+                    # Next slot is another Indic sentinel of the same language
+                    if (next_slot and isinstance(next_slot[0], tuple) and
+                            len(next_slot[0]) == 3 and next_slot[0][2] is True and
+                            next_slot[0][1] == chunk_lang):
+                        chunk_parts.append(next_slot[0][0])
+                        j += 1
+                        continue
+
+                    # Next slot is a delimiter — include it only when the slot
+                    # after it is still the same Indic language.
+                    if (next_slot and len(next_slot) == 1 and
+                            isinstance(next_slot[0], str)):
+                        if j + 1 < len(candidate_options):
+                            peek = candidate_options[j + 1]
+                            if (peek and isinstance(peek[0], tuple) and
+                                    len(peek[0]) == 3 and peek[0][2] is True and
+                                    peek[0][1] == chunk_lang):
+                                chunk_parts.append(next_slot[0])
+                                j += 1
+                                continue
+                    break
+
+                # Translate the entire chunk as one string so the model receives
+                # full sentence/paragraph context rather than isolated words.
+                full_chunk = "".join(chunk_parts)
+                translated_chunk = self.translate_indic(full_chunk, chunk_lang)
+                merged_options.append([translated_chunk])
+                i = j
+            else:
+                merged_options.append(slot)
+                i += 1
+
         if not has_misspelling or not self._has_context_model:
-            return "".join([opts[0] for opts in candidate_options])
+            return "".join([opts[0] for opts in merged_options])
 
         # MLM scoring for English candidates
-        combinations = list(itertools.islice(itertools.product(*candidate_options), 100))
+        combinations = list(itertools.islice(itertools.product(*merged_options), 100))
         best_sentence = text
         best_score = float('inf')
 

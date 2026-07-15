@@ -96,6 +96,15 @@ class TextNormalizer:
         """
         # 1. Raw Input
         logger.info(f"Raw Input: '{text}'")
+        original_text = text
+
+        # Document-level routing for Indian languages
+        initial_lang_info = self.detect_language(text)
+        initial_lang_code = initial_lang_info['language_code']
+        
+        supported_indic_langs = ['ta', 'hi', 'te', 'ml', 'kn', 'bn', 'mr', 'gu', 'pa', 'ur']
+        if initial_lang_code in supported_indic_langs:
+            text = self.advanced_corrector.translate_indic(text, initial_lang_code)
 
         # 2. Text Normalization (clean + chat abbreviations)
         cleaned = self.clean_text(text)
@@ -206,8 +215,8 @@ class TextNormalizer:
                 translated_text = final_text
 
         return {
-            "original_language": lang_info["language_name"],
-            "original_text": text,
+            "original_language": initial_lang_info["language_name"],
+            "original_text": original_text,
             "processed_text": final_text,
             "translated_text": translated_text
         }
