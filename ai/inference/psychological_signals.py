@@ -1,5 +1,6 @@
 import re
 from typing import Any, Dict, Iterable, Mapping
+import math
 
 
 SIGNAL_NAMES = (
@@ -141,3 +142,146 @@ class PsychologicalSignalExtractor:
             results.get("processed_text", ""),
             results.get("translated_text", ""),
         )
+    
+class EmotionStatistics:
+    POSITIVE_EMOTIONS = {
+        "admiration",
+        "amusement",
+        "approval",
+        "caring",
+        "desire",
+        "excitement",
+        "gratitude",
+        "joy",
+        "love",
+        "optimism",
+        "pride",
+        "relief",
+    }
+
+    NEGATIVE_EMOTIONS = {
+        "anger",
+        "annoyance",
+        "disappointment",
+        "disapproval",
+        "disgust",
+        "embarrassment",
+        "fear",
+        "grief",
+        "nervousness",
+        "remorse",
+        "sadness",
+    }
+
+    def __init__(self, emotion_probs: Mapping[str, float]):
+        self.probs = emotion_probs
+
+    def intensity(self) -> float:
+        """Dominant emotion confidence (%)"""
+
+        if not self.probs:
+            return 0.0
+
+        return round(max(self.probs.values()) * 100, 2)
+
+    def diversity(self) -> float:
+        """Normalized Shannon Entropy"""
+
+        entropy = 0.0
+
+        for p in self.probs.values():
+            if p > 0:
+                entropy -= p * math.log(p)
+
+        if len(self.probs) <= 1:
+            return 0.0
+
+        max_entropy = math.log(len(self.probs))
+
+        return round(entropy / max_entropy, 4)
+
+    def positive_affect(self) -> float:
+        """Sum of positive emotion probabilities (%)"""
+
+        score = sum(
+            self.probs.get(emotion, 0.0)
+            for emotion in self.POSITIVE_EMOTIONS
+        )
+
+        return round(score * 100, 2)
+
+    def negative_affect(self) -> float:
+        """Sum of negative emotion probabilities (%)"""
+
+        score = sum(
+            self.probs.get(emotion, 0.0)
+            for emotion in self.NEGATIVE_EMOTIONS
+        )
+
+        return round(score * 100, 2)
+
+    def valence(self) -> float:
+        """
+        Emotional Valence
+
+        Positive Affect - Negative Affect
+        """
+
+        return round(
+            self.positive_affect() - self.negative_affect(),
+            2,
+        )
+
+    def compute_all(self):
+        """Return all computed emotion statistics."""
+
+        return {
+            "intensity": self.intensity(),
+            "diversity": self.diversity(),
+            "positive_affect": self.positive_affect(),
+            "negative_affect": self.negative_affect(),
+            "valence": self.valence(),
+        }
+
+
+if __name__ == "__main__":
+
+    emotion_probs = {
+        "admiration": 0.01,
+        "amusement": 0.00,
+        "anger": 0.02,
+        "annoyance": 0.03,
+        "approval": 0.01,
+        "caring": 0.02,
+        "confusion": 0.05,
+        "curiosity": 0.01,
+        "desire": 0.00,
+        "disappointment": 0.08,
+        "disapproval": 0.02,
+        "disgust": 0.01,
+        "embarrassment": 0.01,
+        "excitement": 0.00,
+        "fear": 0.12,
+        "gratitude": 0.01,
+        "grief": 0.07,
+        "joy": 0.03,
+        "love": 0.02,
+        "nervousness": 0.10,
+        "optimism": 0.02,
+        "pride": 0.00,
+        "realization": 0.03,
+        "relief": 0.01,
+        "remorse": 0.05,
+        "sadness": 0.34,
+        "surprise": 0.01,
+        "neutral": 0.02,
+    }
+
+    stats = EmotionStatistics(emotion_probs)
+
+    print("=" * 50)
+    print("Emotion Statistics")
+    print("=" * 50)
+
+    for key, value in stats.compute_all().items():
+        print(f"{key:<20}: {value}")
