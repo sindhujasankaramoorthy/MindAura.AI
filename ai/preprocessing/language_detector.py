@@ -33,7 +33,7 @@ class LanguageDetector:
         self.negation_words = {w.lower() for w in negation_words}
         self.word_classifier = WordClassifier()
 
-    def detect(self, text: str, ner_entities: List[Tuple[int, int, str, str]] = None) -> List[Tuple[str, str]]:
+    def detect(self, text: str, ner_entities: List[Tuple[int, int, str, str]] = None, pipeline: str = "UNKNOWN") -> List[Tuple[str, str]]:
         """
         Tokenize the text and classify each token's language dynamically.
         Returns a list of (token, language_tag) tuples.
@@ -94,7 +94,7 @@ class LanguageDetector:
             # 2.5 English Token Boundary Detection
             from .language_boundary import classify_token_language
             boundary_lang = classify_token_language(word)
-            if boundary_lang == "ENGLISH":
+            if boundary_lang == "ENGLISH" or pipeline == "ENGLISH":
                 token_classifications.append((word, TokenLanguage.ENGLISH))
                 continue
                 

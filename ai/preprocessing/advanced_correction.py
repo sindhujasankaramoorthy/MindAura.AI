@@ -341,12 +341,15 @@ class EmotionPreservingCorrector:
 
     def correct_english_token(self, token: str) -> List[str]:
         """
-        Applies English spelling correction and returns candidates.
+        Uses SymSpell for English auto-correction.
+        If the word is known, slang, or closely matched, returns candidate pool.
         """
+        from .language_boundary import INTERNET_SLANG
+        
         word = token
         word_lower = word.lower()
 
-        if (len(word) <= 1 or 
+        if word_lower in INTERNET_SLANG or (len(word) <= 1 or 
             word_lower in ("i", "a", "im", "ok", "no") or 
             "'" in word or 
             word_lower in PROTECTED_WORDS):
@@ -408,7 +411,7 @@ class EmotionPreservingCorrector:
             logger.warning(f"Tanglish autocorrect failed: {e}")
             return word
 
-    def correct(self, text: str) -> str:
+    def correct(self, text: str, pipeline: str = "UNKNOWN") -> str:
         """
         Applies Context-Aware Auto Correction with separate English and Tanglish paths.
         Negation recovery runs first to protect negation contractions from SymSpell corruption.
@@ -416,7 +419,7 @@ class EmotionPreservingCorrector:
         # Step 0: Recover negations FIRST (before spell correction corrupts them)
         text = self.recover_negations(text)
 
-        classifications = self.language_detector.detect(text, [])
+        classifications = self.language_detector.detect(text, [], pipeline=pipeline)
         candidate_options = []
         has_misspelling = False
 

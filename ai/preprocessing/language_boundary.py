@@ -1,4 +1,5 @@
 import logging
+import re
 from wordfreq import zipf_frequency as z
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,42 @@ STRONG_ENGLISH_WORDS = {
     "likes", "liking", "liked", "dislike", "dislikes", "disliked",
     "sad", "happy", "angry", "mad", "upset", "glad", "tired", "stressed"
 }
+
+INTERNET_SLANG = {
+    "amk", "idk", "omg", "lol", "gonna", "wanna", "lmao", "tbh", "smh", "btw"
+}
+
+ENGLISH_MISSPELLINGS = {
+    "tommorow": "tomorrow",
+    "mayve": "maybe",
+    "dont": "don't",
+    "cant": "can't",
+    "ill": "I'll",
+}
+
+def classify_sentence_language(text: str) -> dict:
+    """
+    Sentence-level language classification with strict English routing.
+    Returns dict with {'pipeline': 'ENGLISH' | 'TANGLISH' | 'UNKNOWN', 'confidence': float}
+    """
+    words = re.findall(r'\b[a-zA-Z]+\b', text.lower())
+    if not words:
+        return {'pipeline': 'UNKNOWN', 'confidence': 0.0}
+        
+    english_count = 0
+    for w in words:
+        # Check elongated
+        w_base = re.sub(r'(.)\1{2,}', r'\1', w)
+        if w_base in ENGLISH_MISSPELLINGS or w_base in STRONG_ENGLISH_WORDS or w_base in INTERNET_SLANG:
+            english_count += 1
+        elif w_base not in TANGLISH_PARTICLES and z(w_base, 'en') >= 3.0:
+            english_count += 1
+            
+    confidence = english_count / len(words)
+    if confidence >= 0.5:
+        return {'pipeline': 'ENGLISH', 'confidence': confidence}
+    return {'pipeline': 'UNKNOWN', 'confidence': confidence}
+
 
 def classify_token_language(token: str) -> str:
     """

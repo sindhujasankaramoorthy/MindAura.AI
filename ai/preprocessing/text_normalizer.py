@@ -62,11 +62,16 @@ class TextNormalizer:
 
     def clean_text(self, text: str) -> str:
         """
-        Normalize whitespace and tame excessive repeated characters.
+        Normalize whitespace, tame excessive repeated characters, and fix specific english misspellings.
         """
         processed = re.sub(r'\s+', ' ', text).strip()
         processed = re.sub(r'(.)\1{2,}', r'\1\1', processed)
         processed = re.sub(r'(?<![\w])i(?![\w])', 'I', processed)
+        
+        from .language_boundary import ENGLISH_MISSPELLINGS
+        for k, v in ENGLISH_MISSPELLINGS.items():
+            processed = re.sub(r'\b' + re.escape(k) + r'\b', v, processed, flags=re.IGNORECASE)
+            
         return processed
 
     def expand_chat_abbreviations(self, text: str) -> str:
@@ -98,8 +103,23 @@ class TextNormalizer:
         logger.info(f"Raw Input: '{text}'")
         original_text = text
 
-        initial_lang_info = self.detect_language(text)
-        initial_lang_code = initial_lang_info['language_code']
+        logger.debug("Raw language detection input:")
+        
+        from .language_boundary import classify_sentence_language
+        routing_info = classify_sentence_language(text)
+        logger.debug(f"English confidence: {routing_info['confidence']}")
+        
+        has_native = bool(re.search(r'[\u0900-\u0DFF]', text))
+        
+        pipeline = "UNKNOWN"
+        if routing_info['pipeline'] == 'ENGLISH':
+            pipeline = "ENGLISH"
+        elif has_native:
+            pipeline = "NATIVE"
+        else:
+            pipeline = "TANGLISH"
+            
+        logger.debug(f"Selected language pipeline: {pipeline}")
 
         # 2. Text Normalization (clean + chat abbreviations)
         cleaned = self.clean_text(text)
@@ -127,12 +147,14 @@ class TextNormalizer:
 
         # 4. Token-Level Language Detection (runs on protected text)
         from .language_detector import TokenLanguage
-        token_classifications = self.advanced_corrector.language_detector.detect(protected_text, [])
+        token_classifications = self.advanced_corrector.language_detector.detect(protected_text, [], pipeline=pipeline)
         token_langs_str = ", ".join([f"'{token}': {lang}" for token, lang in token_classifications if token.strip()])
         logger.info(f"Language Detection: [{token_langs_str}]")
 
+        initial_lang_info = self.detect_language(text)
+        
         # 5. Pipeline execution (English Spell Correction, Tanglish Autocorrect -> IndicXlit -> AI4Bharat)
-        corrected = self.advanced_corrector.correct(protected_text)
+        corrected = self.advanced_corrector.correct(protected_text, pipeline=pipeline)
         logger.info(f"After Correction: '{corrected}'")
 
         # 8. Context Correction (slang replacement)
