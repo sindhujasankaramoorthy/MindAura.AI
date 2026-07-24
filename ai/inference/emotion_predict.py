@@ -189,8 +189,8 @@ class EmotionAnalyzer:
             # Preprocess, detect language, translate using TextNormalizer
             norm_result = self.normalizer.normalize(text, translator_fn=self.translate_to_english)
             
-            # The inference uses the translated text (which is just processed text if it was English)
-            inference_text = norm_result["translated_text"]
+            # The inference uses the corrected sentence
+            inference_text = norm_result["corrected_sentence"]
             classification = self._classify_emotions(inference_text)
             
             return {
@@ -198,6 +198,8 @@ class EmotionAnalyzer:
                 "original_text": norm_result["original_text"],
                 "processed_text": norm_result["processed_text"],
                 "translated_text": norm_result["translated_text"],
+                "corrected_sentence": norm_result["corrected_sentence"],
+                "preprocessing_metadata": norm_result["metadata"],
                 "dominant_emotion": classification["dominant_emotion"],
                 "dominant_narrative": classification["dominant_narrative"],
                 "emotion_scores": classification["emotion_scores"],
@@ -280,7 +282,7 @@ class EmotionAnalyzer:
             raise ValueError("Input text cannot be empty.")
 
         norm_result = self.normalizer.normalize(text, translator_fn=self.translate_to_english)
-        inference_text = norm_result["translated_text"]
+        inference_text = norm_result["corrected_sentence"]
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             emotion_future = executor.submit(self._classify_emotions, inference_text)
@@ -304,6 +306,8 @@ class EmotionAnalyzer:
             "original_text": norm_result["original_text"],
             "processed_text": norm_result["processed_text"],
             "translated_text": norm_result["translated_text"],
+            "corrected_sentence": norm_result["corrected_sentence"],
+            "preprocessing_metadata": norm_result["metadata"],
             "dominant_emotion": classification["dominant_emotion"],
             "dominant_narrative": classification["dominant_narrative"],
             "emotion_scores": classification["emotion_scores"],
@@ -338,6 +342,8 @@ class EmotionAnalyzer:
             "original_text": preprocess_original,
             "processed_text": preprocess_processed,
             "translated_text": translated_text,
+            "corrected_sentence": analysis_result["corrected_sentence"],
+            "preprocessing_metadata": analysis_result["preprocessing_metadata"],
             "dominant_emotion": dominant_emotion,
             "dominant_narrative": analysis_result["dominant_narrative"],
             "emotion_scores": {k: round(v, 4) for k, v in emotion_scores.items()},

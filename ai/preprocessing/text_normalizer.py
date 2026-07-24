@@ -207,14 +207,73 @@ class TextNormalizer:
         
         # Translation
         translated_text = final_text
+        normalization_type = None
         if lang_code != 'en' and translator_fn is not None:
             try:
                 translated_text = translator_fn(final_text, lang_code)
+                normalization_type = "indic_translation"
             except Exception as e:
                 logger.error(f"Translation failed, falling back to processed text: {e}")
                 translated_text = final_text
 
+        # Build Metadata
+        metadata = []
+        for token, lang in token_classifications:
+            if not token.strip():
+                continue
+                
+            is_punct = not token.replace("'", "").isalnum()
+            ner_type = None
+            ner_original_word = None
+            is_ner_placeholder = False
+            
+            # Identify NER matches
+            for s, e, nt, w in ner_entities:
+                if w == token:
+                    ner_type = nt
+                    ner_original_word = w
+                    is_ner_placeholder = True
+                    break
+                    
+            # Check for elongation in original text (rudimentary check on token)
+            has_elongation = bool(re.search(r'(.)\1{2,}', token))
+            
+            # Get corrected token simulation to see if it was modified
+            corrected_token = token
+            was_corrected = False
+            
+            # Use TokenLanguage string representations
+            lang_str = str(lang)
+            if lang_str == 'TokenLanguage.ENGLISH' or lang_str == 'English':
+                cands = self.advanced_corrector.correct_english_token(token)
+                if cands and cands[0] != token:
+                    corrected_token = cands[0]
+                    was_corrected = True
+            elif lang_str == 'TokenLanguage.TANGLISH' or lang_str == 'Tanglish':
+                cand = self.advanced_corrector.correct_tanglish_token(token)
+                if cand != token:
+                    corrected_token = cand
+                    was_corrected = True
+                    
+            metadata.append({
+                "original_token": token,
+                "normalized_token": token,
+                "corrected_token": corrected_token,
+                "final_token": corrected_token, # Approximation of final token
+                "language": lang_str,
+                "is_ner_placeholder": is_ner_placeholder,
+                "ner_type": ner_type,
+                "ner_original_word": ner_original_word,
+                "normalization_type": normalization_type,
+                "has_elongation": has_elongation,
+                "has_punctuation": is_punct,
+                "was_corrected": was_corrected,
+            })
+
         return {
+            "corrected_sentence": translated_text,
+            "metadata": metadata,
+            # Backward compatibility fields
             "original_language": initial_lang_info["language_name"],
             "original_text": original_text,
             "processed_text": final_text,
