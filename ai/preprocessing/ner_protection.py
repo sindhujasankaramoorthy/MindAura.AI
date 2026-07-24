@@ -169,6 +169,11 @@ class NERProtection:
         Reject entities that are known negation, emotional vocabulary,
         or Tanglish words, so they aren't mistakenly masked.
         """
+        _tanglish_rejects = {
+            "oru", "ah", "dha", "sol", "yen", "nee", "en", "un", "da", "di", "la", "ve", 
+            "iruku", "mudla", "mudiyala", "kuda", "kooda", "ku", "nu", "nga", 
+            "enaku", "unaku", "rendu", "perum", "kastama", "mudila", "pidikula"
+        }
         try:
             from .advanced_correction import PROTECTED_WORDS, NEGATION_RECOVERY_MAP, CUSTOM_OVERRIDES
             from .tanglish_patterns import WORD_REPLACEMENTS
@@ -177,10 +182,10 @@ class NERProtection:
                 | {k.lower() for k in NEGATION_RECOVERY_MAP}
                 | {k.lower() for k in CUSTOM_OVERRIDES}
                 | {k.lower() for k in WORD_REPLACEMENTS}
-                | {"oru", "ah", "dha", "sol", "yen", "nee", "en", "un", "da", "di", "la", "ve", "iruku", "mudla", "mudiyala"}
+                | _tanglish_rejects
             )
         except Exception:
-            _reject = set()
+            _reject = _tanglish_rejects
 
         filtered = []
         for s, e, t, w in entities:
@@ -205,6 +210,63 @@ class NERProtection:
             overlaps = any(not (e <= es or s >= ee) for es, ee, _, _ in result)
             if not overlaps:
                 result.append((s, e, "RELATION", m.group(0)))
+        return result
+
+    @staticmethod
+    def _add_dictionary_fallback(
+        text: str,
+        existing: List[Tuple[int, int, str, str]],
+    ) -> List[Tuple[int, int, str, str]]:
+        """
+        Append known common names from the name dictionary.
+        """
+        try:
+            from .name_dictionary import COMMON_NAMES
+        except ImportError:
+            COMMON_NAMES = set()
+
+        result = list(existing)
+        for m in re.finditer(r"\b[A-Za-z]+\b", text):
+            s, e = m.span()
+            word = m.group(0).lower()
+            if word in COMMON_NAMES:
+                overlaps = any(not (e <= es or s >= ee) for es, ee, _, _ in result)
+                if not overlaps:
+                    result.append((s, e, "PERSON", m.group(0)))
+        return result
+
+    @staticmethod
+    def _add_context_fallback(
+        text: str,
+        existing: List[Tuple[int, int, str, str]],
+    ) -> List[Tuple[int, int, str, str]]:
+        """
+        Detect lowercase names using context cues like 'X and Y'.
+        """
+        result = list(existing)
+        
+        # Look for "WORD and WORD"
+        for m in re.finditer(r"\b([A-Za-z]+)\s+and\s+([A-Za-z]+)\b", text, flags=re.IGNORECASE):
+            w1 = m.group(1)
+            w2 = m.group(2)
+            w1_s = m.start(1)
+            w1_e = m.end(1)
+            w2_s = m.start(2)
+            w2_e = m.end(2)
+            
+            w1_is_person = any(es <= w1_s and ee >= w1_e and et == "PERSON" for es, ee, et, _ in result)
+            w2_is_person = any(es <= w2_s and ee >= w2_e and et == "PERSON" for es, ee, et, _ in result)
+            
+            if w1_is_person and not w2_is_person:
+                overlaps = any(not (w2_e <= es or w2_s >= ee) for es, ee, _, _ in result)
+                if not overlaps:
+                    result.append((w2_s, w2_e, "PERSON", w2))
+                    
+            if w2_is_person and not w1_is_person:
+                overlaps = any(not (w1_e <= es or w1_s >= ee) for es, ee, _, _ in result)
+                if not overlaps:
+                    result.append((w1_s, w1_e, "PERSON", w1))
+                    
         return result
 
     # ──────────────────────────────────────────────────────────────
@@ -233,6 +295,9 @@ class NERProtection:
         raw = self._align_to_word_boundaries(text, raw)
         raw = self._reject_protected(raw)
         raw = self._add_relation_fallback(text, raw)
+        raw = self._add_dictionary_fallback(text, raw)
+        raw = self._add_context_fallback(text, raw)
+        raw = self._reject_protected(raw)  # Reject again in case fallbacks added Tanglish words
 
         raw.sort(key=lambda x: x[0])
 
@@ -252,10 +317,12 @@ class NERProtection:
         entities: List[Tuple[int, int, str, str]] = None,
     ) -> Tuple[str, Dict[str, str]]:
         """
-        Replace detected entities with ``**TYPE_N**`` placeholders.
+        Replace detected entities with ``<TYPE_N>`` placeholders.
 
         Returns ``(protected_text, placeholder_map)``.
         """
+        logger.debug("Raw input")
+        
         if entities is None:
             entities = self.detect_entities(text)
 
@@ -267,10 +334,12 @@ class NERProtection:
         replacements = []
 
         for start, end, ent_type, original_word in entities:
+            if ent_type not in ("PERSON", "ORG", "GPE", "LOCATION", "DATE"):
+                continue
             key = (ent_type, original_word.lower())
             if key not in unique_to_placeholder:
                 type_counters[ent_type] = type_counters.get(ent_type, 0) + 1
-                placeholder = f"**{ent_type}_{type_counters[ent_type]}**"
+                placeholder = f"<{ent_type}_{type_counters[ent_type]}>"
                 unique_to_placeholder[key] = placeholder
             else:
                 placeholder = unique_to_placeholder[key]
@@ -285,18 +354,19 @@ class NERProtection:
             protected = protected[:start] + placeholder + protected[end:]
             placeholder_map[placeholder] = original_word
 
-        logger.debug(f"Protected Text: '{protected}'")
+        logger.debug("Protected text")
         return protected, placeholder_map
 
     def restore(self, text: str, placeholder_map: Dict[str, str]) -> str:
-        """Restore ``**TYPE_N**`` placeholders back to original words, preserving/correcting casing for proper nouns."""
+        """Restore ``<TYPE_N>`` placeholders back to original words, preserving/correcting casing for proper nouns."""
         restored = text
         for placeholder, original in placeholder_map.items():
-            match = re.match(r"\*\*([A-Z_]+)_\d+\*\*", placeholder)
+            match = re.match(r"<([A-Z_]+)_\d+>", placeholder)
             if match:
                 ent_type = match.group(1)
                 if ent_type in ("PERSON", "GPE", "ORG"):
                     original = original.title()
+            logger.debug(f"Restoring {placeholder} -> {original}")
             restored = re.sub(re.escape(placeholder), original, restored, flags=re.IGNORECASE)
-        logger.debug(f"Restored Text: '{restored}'")
+        logger.debug("Final restored sentence")
         return restored

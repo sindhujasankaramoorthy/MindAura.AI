@@ -42,7 +42,7 @@ class LanguageDetector:
         # The character class [\w\u0080-\uFFFF]+ captures complete Indic script
         # words (Tamil, Hindi, Telugu, Malayalam, etc.) as single tokens instead
         # of shattering them into individual Unicode code points.
-        token_pattern = r"(\*\*[A-Z_]+_\d+\*\*|[\w\u0080-\uFFFF]+(?:'[\w\u0080-\uFFFF]+)?)"
+        token_pattern = r"(<[A-Z_]+_\d+>|[\w\u0080-\uFFFF]+(?:'[\w\u0080-\uFFFF]+)?)"
         tokens_with_delimiters = re.split(token_pattern, text, flags=re.UNICODE)
         
         token_classifications = []
@@ -64,8 +64,8 @@ class LanguageDetector:
             word = token
             word_lower = word.lower()
             
-            # 1b. Check if NER placeholder (e.g. **PERSON_1**)
-            if word.startswith("**") and word.endswith("**"):
+            # 1b. Check if NER placeholder (e.g. <PERSON_1>)
+            if word.startswith("<") and word.endswith(">") and "_" in word:
                 token_classifications.append((word, TokenLanguage.UNKNOWN))
                 continue
                 
@@ -88,6 +88,13 @@ class LanguageDetector:
 
             # 2. Check if negation or protected word
             if word_lower in self.negation_words or word_lower in self.protected_words:
+                token_classifications.append((word, TokenLanguage.ENGLISH))
+                continue
+                
+            # 2.5 English Token Boundary Detection
+            from .language_boundary import classify_token_language
+            boundary_lang = classify_token_language(word)
+            if boundary_lang == "ENGLISH":
                 token_classifications.append((word, TokenLanguage.ENGLISH))
                 continue
                 

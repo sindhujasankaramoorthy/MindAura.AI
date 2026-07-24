@@ -12,6 +12,15 @@ WORD_REPLACEMENTS = {
     "romba": "very",
     "bayama": "afraid",
     "iruku": "feel",
+    "adhu": "it",
+    "theriyum": "know",
+    "nu": "",
+    "la": "",
+    "da": "",
+    "di": "",
+    "nga": "",
+    "uh": "",
+    "ehh": "",
     "mathiri": "somewhat",
     "madhiri": "somewhat",
     "manasu": "mind",
@@ -238,6 +247,45 @@ def normalize_tanglish_semantics(text: str) -> str:
         else:
             processed = re.sub(r"\b" + re.escape(pattern) + r"\b", replacement, processed)
             
+    # 2b. Fuzzy Matching Fallback
+    try:
+        from rapidfuzz import process, fuzz
+        from wordfreq import zipf_frequency as z
+        
+        words = processed.split()
+        fuzzy_corrected_words = []
+        semantic_keys = [k for k in WORD_REPLACEMENTS.keys() if " " not in k]
+        
+        for w in words:
+            # Extract just alphabetic characters for matching
+            alpha_w = re.sub(r'[^a-zA-Z]', '', w).lower()
+            if not alpha_w:
+                fuzzy_corrected_words.append(w)
+                continue
+                
+            # Skip if it is a common English word (zipf > 4.0 is very common)
+            # We don't want to accidentally translate valid English words
+            if z(alpha_w, "en") > 3.8:
+                fuzzy_corrected_words.append(w)
+                continue
+                
+            match = process.extractOne(alpha_w, semantic_keys, scorer=fuzz.ratio)
+            if match and match[1] >= 85.0:
+                matched_key = match[0]
+                replacement = WORD_REPLACEMENTS[matched_key]
+                if replacement == "":
+                    continue # Remove word
+                else:
+                    # Replace alphabetic part with replacement, keeping punctuation
+                    fuzzy_corrected_words.append(w.replace(alpha_w, replacement))
+            else:
+                fuzzy_corrected_words.append(w)
+                
+        processed = " ".join(fuzzy_corrected_words)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Fuzzy fallback failed: {e}")
+
     # Clean up duplicate spaces
     processed = re.sub(r"\s+", " ", processed).strip()
     

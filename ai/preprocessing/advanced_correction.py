@@ -393,34 +393,20 @@ class EmotionPreservingCorrector:
         word = token
         word_lower = word.lower()
 
-        if candidate_pool is None:
-            from .tanglish_patterns import WORD_REPLACEMENTS
-            candidate_pool = set(WORD_REPLACEMENTS.keys())
+        # Prevent autocorrect from destroying specific tokens before phrase normalization
+        if word_lower in {"pidikula", "pidikala", "pudikula", "pudikala"}:
+            return word_lower
 
-        # Find best canonical root
-        best_root = None
-        min_dist = 99
-        for root in candidate_pool:
-            dist = tanglish_distance(word_lower, root)
-            if dist < min_dist:
-                min_dist = dist
-                best_root = root
-
-        # Apply length-dependent edit distance constraints to avoid matching short words
-        max_allowed_dist = 2
-        if len(word_lower) <= 2:
-            max_allowed_dist = 0
-        elif len(word_lower) <= 3:
-            max_allowed_dist = 1
-
-        if min_dist <= max_allowed_dist:
-            corrected = best_root
-            if word.istitle(): corrected = corrected.title()
-            elif word.isupper(): corrected = corrected.upper()
-            logger.debug(f"[Tanglish Correction Path] Corrected '{word}' -> '{corrected}' (distance: {min_dist})")
+        # Use the official Tanglish model for spelling correction
+        try:
+            from ai.tanglish_model.src.autocorrect import correct_word
+            tanglish_result = correct_word(word)
+            corrected = tanglish_result.get("corrected", word)
+            logger.debug(f"[Tanglish Correction Path] Corrected '{word}' -> '{corrected}'")
             return corrected
-
-        return word
+        except Exception as e:
+            logger.warning(f"Tanglish autocorrect failed: {e}")
+            return word
 
     def correct(self, text: str) -> str:
         """
@@ -465,7 +451,11 @@ class EmotionPreservingCorrector:
             # 3. Tanglish Correction Path
             elif lang == TokenLanguage.TANGLISH:
                 corrected = self.correct_tanglish_token(word)
-                candidate_options.append([corrected])
+                logger.debug(f"After autocorrect: '{corrected}'")
+                
+                # Instead of translating word-by-word, we append it as a TANGLISH_CHUNK sentinel.
+                # This allows phrase normalization across multiple tokens.
+                candidate_options.append([(corrected, 'TANGLISH_CHUNK', True)])
 
             # 4. Indian Language — defer translation: store a sentinel tuple so
             # consecutive Indic tokens can be grouped and translated together
@@ -510,6 +500,8 @@ class EmotionPreservingCorrector:
                     # after it is still the same Indic language.
                     if (next_slot and len(next_slot) == 1 and
                             isinstance(next_slot[0], str)):
+                        if next_slot[0].startswith("<") and next_slot[0].endswith(">") and "_" in next_slot[0]:
+                            break
                         if j + 1 < len(candidate_options):
                             peek = candidate_options[j + 1]
                             if (peek and isinstance(peek[0], tuple) and
@@ -523,8 +515,39 @@ class EmotionPreservingCorrector:
                 # Translate the entire chunk as one string so the model receives
                 # full sentence/paragraph context rather than isolated words.
                 full_chunk = "".join(chunk_parts)
-                translated_chunk = self.translate_indic(full_chunk, chunk_lang)
-                merged_options.append([translated_chunk])
+                
+                if chunk_lang == 'TANGLISH_CHUNK':
+                    logger.debug("Before emotion phrase normalization:")
+                    try:
+                        from ai.preprocessing.emotion_phrase_normalizer import normalize_emotion_phrases
+                        full_chunk = normalize_emotion_phrases(full_chunk)
+                    except Exception as e:
+                        logger.error(f"Phrase normalization failed: {e}")
+                    logger.debug("After emotion phrase normalization:")
+                    
+                    # Canonical Normalization
+                    try:
+                        from ai.preprocessing.tanglish_canonical import normalize_canonical_tanglish_sentence
+                        full_chunk = normalize_canonical_tanglish_sentence(full_chunk)
+                    except Exception as e:
+                        logger.error(f"Canonical normalization failed: {e}")
+                        
+                    logger.debug("Before IndicXlit:")
+                    try:
+                        from ai.transliteration.tanglish_to_tamil import TanglishToTamil
+                        transliterated = TanglishToTamil.get_instance().transliterate_sentence(full_chunk)
+                    except Exception as e:
+                        logger.error(f"Failed to transliterate: {e}")
+                        transliterated = full_chunk
+                        
+                    logger.debug("Before translation:")
+                    translated_chunk = self.translate_indic(transliterated, 'TAMIL')
+                    merged_options.append([translated_chunk])
+                else:
+                    logger.debug("Before translation:")
+                    translated_chunk = self.translate_indic(full_chunk, chunk_lang)
+                    merged_options.append([translated_chunk])
+                    
                 i = j
             else:
                 merged_options.append(slot)

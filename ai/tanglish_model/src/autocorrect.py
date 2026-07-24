@@ -1,9 +1,9 @@
 from rapidfuzz import process,fuzz
-from vocabulary import load_vocabulary,create_word_set
-from preprocess import load_comments
-from normalize import normalize_word
+from .vocabulary import load_vocabulary,create_word_set
+from .preprocess import load_comments
+from .normalize import normalize_word
 
-from rules import should_skip
+from .rules import should_skip
 #variables
 df=load_vocabulary()
 word_set=create_word_set(df)

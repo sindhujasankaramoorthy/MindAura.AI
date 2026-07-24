@@ -98,101 +98,64 @@ class TextNormalizer:
         logger.info(f"Raw Input: '{text}'")
         original_text = text
 
-        # Document-level routing for Indian languages
         initial_lang_info = self.detect_language(text)
         initial_lang_code = initial_lang_info['language_code']
-        
-        supported_indic_langs = ['ta', 'hi', 'te', 'ml', 'kn', 'bn', 'mr', 'gu', 'pa', 'ur']
-        if initial_lang_code in supported_indic_langs:
-            text = self.advanced_corrector.translate_indic(text, initial_lang_code)
 
         # 2. Text Normalization (clean + chat abbreviations)
         cleaned = self.clean_text(text)
         cleaned = self.expand_chat_abbreviations(cleaned)
         logger.debug(f"After Text Normalization: '{cleaned}'")
 
-        # 3. Detect Named Entities (without masking yet)
+        # 3. Detect Named Entities & Protect (Masking)
         all_entities = []
-        if self.advanced_corrector.ner_protection:
-            all_entities = self.advanced_corrector.ner_protection.detect_entities(cleaned)
-
-        # 4. Language Detection Layer (Token-level)
-        from .language_detector import TokenLanguage
-        token_classifications = self.advanced_corrector.language_detector.detect(cleaned, all_entities)
-        token_langs_str = ", ".join([f"'{token}': {lang}" for token, lang in token_classifications if token.strip()])
-        logger.info(f"Language Detection: [{token_langs_str}]")
-
-        # 5. NER Protection Layer (run only on Unknown tokens)
-        ner_entities = []
         protected_text, placeholder_map = cleaned, {}
         
         if self.advanced_corrector.ner_protection:
+            all_entities = self.advanced_corrector.ner_protection.detect_entities(cleaned)
             
-            # Find spans of all tokens classified as Unknown
-            unknown_spans = []
-            current_idx = 0
-            for token, lang in token_classifications:
-                start = cleaned.find(token, current_idx)
-                if start != -1:
-                    end = start + len(token)
-                    current_idx = end
-                    if lang == TokenLanguage.UNKNOWN:
-                        unknown_spans.append((start, end))
-                else:
-                    # Fallback
-                    current_idx += len(token)
-
-            # Filter entities: keep RELATION or entities overlapping with Unknown tokens
-            for start, end, ent_type, word in all_entities:
-                if ent_type == 'RELATION':
-                    ner_entities.append((start, end, ent_type, word))
-                else:
-                    # Check overlap with any Unknown token span
-                    overlaps = False
-                    for u_start, u_end in unknown_spans:
-                        if not (end <= u_start or start >= u_end):
-                            overlaps = True
-                            break
-                    if overlaps:
-                        ner_entities.append((start, end, ent_type, word))
-                        
             # Log NER Entities
-            if ner_entities:
-                ner_log = "\n".join([f"- {ent[2]}: '{ent[3]}' (at index {ent[0]}:{ent[1]})" for ent in ner_entities])
+            if all_entities:
+                ner_log = "\n".join([f"- {ent[2]}: '{ent[3]}' (at index {ent[0]}:{ent[1]})" for ent in all_entities])
                 logger.info(f"NER Entities:\n{ner_log}")
             else:
                 logger.info("NER Entities:\n[]")
                 
-            # Apply protection masking
-            protected_text, placeholder_map = self.advanced_corrector.ner_protection.protect(cleaned, ner_entities)
+            # Apply protection masking FIRST
+            protected_text, placeholder_map = self.advanced_corrector.ner_protection.protect(cleaned, all_entities)
         else:
             logger.info("NER Entities:\n[]")
 
-        # 5. Language-Specific Auto Correction (English + Tanglish paths)
+        # 4. Token-Level Language Detection (runs on protected text)
+        from .language_detector import TokenLanguage
+        token_classifications = self.advanced_corrector.language_detector.detect(protected_text, [])
+        token_langs_str = ", ".join([f"'{token}': {lang}" for token, lang in token_classifications if token.strip()])
+        logger.info(f"Language Detection: [{token_langs_str}]")
+
+        # 5. Pipeline execution (English Spell Correction, Tanglish Autocorrect -> IndicXlit -> AI4Bharat)
         corrected = self.advanced_corrector.correct(protected_text)
         logger.info(f"After Correction: '{corrected}'")
 
-        # 6. Context Correction (slang replacement)
+        # 8. Context Correction (slang replacement)
         context_corrected = self.advanced_corrector.context_correct(corrected)
         logger.debug(f"After Context Correction: '{context_corrected}'")
 
-        # 7. Tanglish Semantic Normalization
+        # 9. Tanglish Semantic Normalization (applies English mappings)
         semantic_normalized = normalize_tanglish_semantics(context_corrected)
         logger.info(f"After Semantic Normalization: '{semantic_normalized}'")
 
-        # 8. Negation Recovery
+        # 10. Negation Recovery
         neg_recovered = self.advanced_corrector.recover_negations(semantic_normalized)
         logger.debug(f"After Negation Recovery: '{neg_recovered}'")
 
-        # 9. Phrase Standardization
+        # 11. Phrase Standardization
         standardized = self.advanced_corrector.standardize_phrases(neg_recovered)
         logger.debug(f"After Phrase Standardization: '{standardized}'")
 
-        # 10. Sentence Reconstruction
+        # 12. Sentence Reconstruction
         reconstructed = self.advanced_corrector.reconstruct_sentence(standardized)
         logger.debug(f"After Sentence Reconstruction: '{reconstructed}'")
 
-        # 11. NER Restoration
+        # 13. Restore Protected NER Entities
         if self.advanced_corrector.ner_protection:
             final_text = self.advanced_corrector.ner_protection.restore(reconstructed, placeholder_map)
         else:
@@ -205,7 +168,7 @@ class TextNormalizer:
         lang_info = self.detect_language(final_text)
         lang_code = lang_info['language_code']
         
-        # Translation
+        # Translation Fallback (NLLB)
         translated_text = final_text
         normalization_type = None
         if lang_code != 'en' and translator_fn is not None:
@@ -218,6 +181,7 @@ class TextNormalizer:
 
         # Build Metadata
         metadata = []
+        tanglish_meta_idx = 0
         for token, lang in token_classifications:
             if not token.strip():
                 continue
@@ -228,12 +192,12 @@ class TextNormalizer:
             is_ner_placeholder = False
             
             # Identify NER matches
-            for s, e, nt, w in ner_entities:
-                if w == token:
-                    ner_type = nt
-                    ner_original_word = w
-                    is_ner_placeholder = True
-                    break
+            if token in placeholder_map:
+                is_ner_placeholder = True
+                ner_original_word = placeholder_map[token]
+                m = re.match(r"<([A-Z_]+)_\d+>", token)
+                if m:
+                    ner_type = m.group(1)
                     
             # Check for elongation in original text (rudimentary check on token)
             has_elongation = bool(re.search(r'(.)\1{2,}', token))
@@ -244,6 +208,10 @@ class TextNormalizer:
             
             # Use TokenLanguage string representations
             lang_str = str(lang)
+            tanglish_info = {}
+            translated_token = token
+            confidence = 100.0
+            
             if lang_str == 'TokenLanguage.ENGLISH' or lang_str == 'English':
                 cands = self.advanced_corrector.correct_english_token(token)
                 if cands and cands[0] != token:
@@ -254,11 +222,18 @@ class TextNormalizer:
                 if cand != token:
                     corrected_token = cand
                     was_corrected = True
+                        
+                # Compute translated token for Tanglish
+                translated_token = normalize_tanglish_semantics(corrected_token)
+                confidence = tanglish_info.get("confidence", 100.0)
                     
-            metadata.append({
+            meta_obj = {
                 "original_token": token,
-                "normalized_token": token,
+                "detected_language": lang_str,
                 "corrected_token": corrected_token,
+                "translated_token": translated_token,
+                "confidence": confidence,
+                "normalized_token": token,
                 "final_token": corrected_token, # Approximation of final token
                 "language": lang_str,
                 "is_ner_placeholder": is_ner_placeholder,
@@ -268,7 +243,13 @@ class TextNormalizer:
                 "has_elongation": has_elongation,
                 "has_punctuation": is_punct,
                 "was_corrected": was_corrected,
-            })
+            }
+            # Merge extra tanglish info if any
+            for k, v in tanglish_info.items():
+                if k not in meta_obj:
+                    meta_obj[f"tanglish_{k}"] = v
+                    
+            metadata.append(meta_obj)
 
         return {
             "corrected_sentence": translated_text,

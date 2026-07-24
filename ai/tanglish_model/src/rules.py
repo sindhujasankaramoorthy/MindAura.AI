@@ -1,6 +1,6 @@
 import re
 import string
-from language_detector import is_english
+from .language_detector import is_english
 def is_placeholder(word):
     """
     Detect placeholders like:

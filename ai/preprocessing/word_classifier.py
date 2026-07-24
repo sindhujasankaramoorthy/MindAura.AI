@@ -12,6 +12,7 @@ import csv
 import os
 import logging
 from wordfreq import zipf_frequency as z
+from rapidfuzz import process, fuzz
 
 logger = logging.getLogger(__name__)
 
@@ -19,16 +20,17 @@ class WordClassifier:
 
     def __init__(self):
         self.tanglish_words = set()
-        tanglish_csv_path = os.path.join(os.path.dirname(__file__), "data", "third_enhanced_transliterated_words.csv")
-        if os.path.exists(tanglish_csv_path):
-            with open(tanglish_csv_path, 'r', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    word = row.get('word', '').strip().lower()
-                    if word:
-                        self.tanglish_words.add(word)
-        else:
-            logger.warning(f"Tanglish CSV not found at {tanglish_csv_path}")
+        
+        try:
+            from ai.tanglish_model.src.vocabulary import load_vocabulary, create_word_set
+            df = load_vocabulary()
+            self.tanglish_words = create_word_set(df)
+        except Exception as e:
+            logger.warning(f"Failed to load official Tanglish vocabulary: {e}")
+            
+        # Add protected Tanglish particles so they are never treated as English
+        particles = {"nu", "la", "da", "di", "ah", "nga", "uh", "ehh"}
+        self.tanglish_words.update(particles)
             
         try:
             import fasttext
@@ -67,6 +69,12 @@ class WordClassifier:
                 if lang_code in self.supported_langs:
                     return self.supported_langs[lang_code]
         
+        # If it falls through to UNKNOWN, perform a fuzzy check against Tanglish vocabulary
+        if self.tanglish_words:
+            match = process.extractOne(w_lower, self.tanglish_words, scorer=fuzz.ratio)
+            if match and match[1] >= 85.0:
+                return "TANGLISH"
+
         return "UNKNOWN"
 
 if __name__ == "__main__":
