@@ -54,26 +54,54 @@ class QwenReasoning:
         if not emotion_scores:
             raise ValueError("Emotion scores cannot be empty.")
 
+        metadata = results.get("preprocessing_metadata", [])
+        
+        # Build metadata summary
+        langs = set()
+        entities = []
+        corrections = []
+        elongated = []
+        
+        for m in metadata:
+            lang = m.get("language", "Unknown")
+            if lang != "Unknown":
+                langs.add(lang)
+            if m.get("is_ner_placeholder"):
+                entities.append(f"{m.get('ner_original_word')} ({m.get('ner_type')})")
+            if m.get("was_corrected"):
+                corrections.append(f"{m.get('original_token')} -> {m.get('corrected_token')}")
+            if m.get("has_elongation"):
+                elongated.append(m.get("original_token"))
+                
+        meta_summary = f"- Detected Languages: {', '.join(langs) if langs else 'None'}\n"
+        meta_summary += f"- Protected Entities: {', '.join(entities) if entities else 'None'}\n"
+        meta_summary += f"- Auto-corrections applied: {len(corrections)}\n"
+        if elongated:
+            meta_summary += f"- Emphasized (elongated) words: {', '.join(elongated)}"
+
         # Prepare enriched user input format
         user_message = f"""INPUT:
 
 1. Patient Journal (Original):
 {journal_text}
 
-2. Patient Journal (Processed/Translated):
-{results.get('translated_text', '')}
+2. Patient Journal (Processed/Corrected):
+{results.get('corrected_sentence', results.get('translated_text', ''))}
 
-3. Dominant Emotion: {results.get('dominant_emotion', '')} (Narrative: {results.get('dominant_narrative', results.get('dominant_emotion', ''))})
+3. Preprocessing Metadata Summary:
+{meta_summary}
 
-4. Top Emotions:
+4. Dominant Emotion: {results.get('dominant_emotion', '')} (Narrative: {results.get('dominant_narrative', results.get('dominant_emotion', ''))})
+
+5. Top Emotions:
 {json.dumps(results.get('top_emotions', {}), indent=2)}
 
-5. Deep Emotional Metrics:
+6. Deep Emotional Metrics:
 - Emotional Intensity: {results.get('emotional_intensity', 0)}/100
 - Emotional Diversity: {results.get('emotional_diversity', 0)}/100
 - Emotional Complexity: {results.get('emotional_complexity', 0)}/100
 
-6. Psychological Signals (descriptive, non-diagnostic JSON):
+7. Psychological Signals (descriptive, non-diagnostic JSON):
 {json.dumps(results.get('psychological_signals', {}), indent=2)}"""
 
         payload = {
@@ -130,7 +158,8 @@ if __name__ == "__main__":
 
     print("\n" + "=" * 60)
     print("   MindAura - Psychiatric Emotional Interpretation (Qwen)")
-    print("   Write a journal entry below.")
+    print("   Paste or type a multi-line journal entry below.")
+    print("   Press Enter twice (empty line) or type END to submit.")
     print("   Type 'exit' or 'quit' to stop.")
     print("=" * 60)
 
@@ -142,7 +171,25 @@ if __name__ == "__main__":
 
     while True:
         print()
-        user_input = input("📝 Enter patient journal text: ").strip()
+        print("📝 Enter patient journal (empty line or END to submit):")
+
+        # Collect multiple lines into a single journal string.
+        # Stops when the user enters an empty line (double Enter) or types END.
+        journal_lines = []
+        while True:
+            try:
+                line = input()
+            except EOFError:
+                # Support piped / redirected input
+                break
+            if line.strip().upper() == "END":
+                break
+            if line == "" and journal_lines:
+                # Empty line after at least one line of content → end of entry
+                break
+            journal_lines.append(line)
+
+        user_input = "\n".join(journal_lines).strip()
 
         if user_input.lower() in ("exit", "quit"):
             print("\nGoodbye! 💙")

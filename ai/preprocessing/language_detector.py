@@ -1,8 +1,8 @@
-
-
 import re
 import logging
 from typing import List, Tuple, Set
+
+from .word_classifier import WordClassifier
 
 logger = logging.getLogger(__name__)
 
@@ -10,6 +10,16 @@ class TokenLanguage:
     ENGLISH = "English"
     TANGLISH = "Tanglish"
     UNKNOWN = "Unknown"
+    TAMIL = "TAMIL"
+    HINDI = "HINDI"
+    TELUGU = "TELUGU"
+    MALAYALAM = "MALAYALAM"
+    KANNADA = "KANNADA"
+    BENGALI = "BENGALI"
+    MARATHI = "MARATHI"
+    GUJARATI = "GUJARATI"
+    PUNJABI = "PUNJABI"
+    URDU = "URDU"
 
 class LanguageDetector:
     """
@@ -21,45 +31,19 @@ class LanguageDetector:
         self.sym_spell = sym_spell
         self.protected_words = {w.lower() for w in protected_words}
         self.negation_words = {w.lower() for w in negation_words}
-
-    def _is_tanglish(self, word: str) -> bool:
-        w = word.lower()
-        
-        # 1. English dict exact match check
-        from symspellpy import Verbosity
-        exact = self.sym_spell.lookup(w, Verbosity.TOP, max_edit_distance=0, include_unknown=False)
-        if exact and exact[0].count > 1:
-            return False
-            
-        # 2. English typo check with tight ratio (avoid classifying typos as Tanglish unless very far)
-        close = self.sym_spell.lookup(w, Verbosity.CLOSEST, max_edit_distance=2, include_unknown=False)
-        if close:
-            ratio = close[0].distance / max(len(w), 1)
-            if ratio <= 0.45:
-                return False
-                
-        # 3. Known common short particles/pronouns (fallback list)
-        if w in ("oru", "ah", "dha", "sol", "yen", "nee", "en", "un", "da", "di", "la", "ve"):
-            return True
-            
-        # 4. English suffix protection (English words like 'feeling', 'sadness' aren't Tanglish)
-        ENGLISH_SUFFIXES = ("ing", "tion", "ness", "ment", "edly", "ness", "ed", "er", "est", "ly", "ful")
-        if any(w.endswith(sfx) for sfx in ENGLISH_SUFFIXES) and len(w) > 5:
-            return False
-            
-        # 5. Romanized Tamil morphological endings (vowels + common consonants)
-        # Tamil words highly tend to end in vowels (aeiou) or m, n, l, r, y, h
-        TAMIL_ENDINGS = set('aeiou') | {'m', 'n', 'l', 'r', 'y', 'h'}
-        return w[-1] in TAMIL_ENDINGS
+        self.word_classifier = WordClassifier()
 
     def detect(self, text: str, ner_entities: List[Tuple[int, int, str, str]] = None) -> List[Tuple[str, str]]:
         """
         Tokenize the text and classify each token's language dynamically.
         Returns a list of (token, language_tag) tuples.
         """
-        # Split by placeholders OR words, keeping delimiters
-        token_pattern = r"(\*\*[A-Z_]+_\d+\*\*|[a-zA-Z]+(?:'[a-zA-Z]+)?)"
-        tokens_with_delimiters = re.split(token_pattern, text)
+        # Split by placeholders OR words, keeping delimiters.
+        # The character class [\w\u0080-\uFFFF]+ captures complete Indic script
+        # words (Tamil, Hindi, Telugu, Malayalam, etc.) as single tokens instead
+        # of shattering them into individual Unicode code points.
+        token_pattern = r"(\*\*[A-Z_]+_\d+\*\*|[\w\u0080-\uFFFF]+(?:'[\w\u0080-\uFFFF]+)?)"
+        tokens_with_delimiters = re.split(token_pattern, text, flags=re.UNICODE)
         
         token_classifications = []
         current_char_idx = 0
@@ -107,38 +91,16 @@ class LanguageDetector:
                 token_classifications.append((word, TokenLanguage.ENGLISH))
                 continue
                 
-            # 3. Check if in English dictionary (SymSpell exact frequency lookup)
-            from symspellpy import Verbosity
-            suggestions = self.sym_spell.lookup(
-                word_lower, Verbosity.TOP, max_edit_distance=0, include_unknown=False
-            )
-            # Filter out custom Tanglish entries with count=1 from being treated as English
-            if suggestions and suggestions[0].count > 1:
+            # 3. Classify with WordClassifier
+            lang_str = self.word_classifier.classify(word)
+            if lang_str == "ENGLISH":
                 token_classifications.append((word, TokenLanguage.ENGLISH))
-                continue
-
-            # 4. Check if Morphologically Tanglish
-            if self._is_tanglish(word_lower):
+            elif lang_str == "TANGLISH":
                 token_classifications.append((word, TokenLanguage.TANGLISH))
-                continue
-
-            # 5. Check if it's an English typo (edit distance <= 2 to a high-frequency word, length >= 4)
-            is_english_typo = False
-            if len(word_lower) >= 4:
-                suggestions = self.sym_spell.lookup(
-                    word_lower, Verbosity.CLOSEST, max_edit_distance=2, include_unknown=False
-                )
-                if suggestions:
-                    for s in suggestions[:2]:
-                        ratio = s.distance / max(len(word_lower), 1)
-                        if ratio <= 0.45:
-                            is_english_typo = True
-                            break
-            if is_english_typo:
-                token_classifications.append((word, TokenLanguage.ENGLISH))
-                continue
-                    
-            # 6. Default fallback for other unmatched words
-            token_classifications.append((word, TokenLanguage.UNKNOWN))
-            
+            elif lang_str == "UNKNOWN":
+                token_classifications.append((word, TokenLanguage.UNKNOWN))
+            else:
+                # It's an Indian language (e.g. "TAMIL")
+                token_classifications.append((word, getattr(TokenLanguage, lang_str, lang_str)))
+                
         return token_classifications
