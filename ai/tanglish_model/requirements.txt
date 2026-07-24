@@ -1,0 +1,10 @@
+torch
+transformers
+datasets
+sentencepiece
+pandas
+scikit-learn
+accelerate
+evaluate
+rapidfuzz
+wordfreq
