@@ -134,3 +134,13 @@ ai/voice/recordings/
 # Python cache
 __pycache__/
 *.pyc
+
+# Training audio datasets
+ai/training/processed_audio/
+ai/training/raw_audio/
+
+# Do not ignore source files
+!ai/training/train_ser.py
+!ai/training/preprocess_audio.py
+!ai/training/build_metadata.py
+!ai/voice/test_qwen_voice.py
