@@ -113,3 +113,24 @@ coverage.xml
 *.pickle
 *.pkl
 test_nllb.py
+
+# Virtual environment
+venv/
+
+# Datasets
+ai/training/datasets/
+
+# Trained models
+models/
+checkpoints/
+*.pth
+*.pt
+*.bin
+*.safetensors
+
+# Audio recordings
+ai/voice/recordings/
+
+# Python cache
+__pycache__/
+*.pyc
