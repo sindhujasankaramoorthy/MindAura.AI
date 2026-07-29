@@ -135,6 +135,72 @@ class QwenReasoning:
             logger.error(f"Unexpected error in reasoning model interpretation: {str(e)}")
             raise
 
+    def interpret_voice(self, voice_results: Dict[str, Any]) -> str:
+        """
+        Generate interpretation using the Ollama API with Qwen, focusing on multimodal voice analysis.
+        """
+        if not voice_results or not isinstance(voice_results, dict):
+            raise ValueError("Voice results dictionary cannot be empty.")
+            
+        transcript = voice_results.get("transcript", "")
+        if not transcript:
+            raise ValueError("Transcript cannot be empty.")
+            
+        fusion_analysis = voice_results.get("fusion_analysis", {})
+        raw_vocal = voice_results.get("raw_vocal_emotion", {})
+        raw_text = voice_results.get("raw_text_emotions", {})
+
+        user_message = f"""INPUT:
+
+1. Transcript (Speech-to-Text):
+{transcript}
+
+2. Vocal Emotion Analysis (Acoustic):
+- Dominant Vocal Emotion: {raw_vocal.get('primary_emotion', 'Unknown')}
+- Confidence: {raw_vocal.get('confidence', 0)}
+- Acoustic Features: {json.dumps(raw_vocal.get('voice_features', {}), indent=2)}
+
+3. Text Emotion Analysis (Semantic):
+- Top Text Emotion: {fusion_analysis.get('top_text_emotion', 'Unknown')}
+- Full Text Emotions: {json.dumps(raw_text, indent=2)}
+
+4. Fused Mental Health Analysis:
+- Mental Health Distress Score: {fusion_analysis.get('mental_health_distress_score', 0)}/100
+- Risk Level: {fusion_analysis.get('risk_level', 'Unknown')}
+- Acoustic Dissonance Detected: {fusion_analysis.get('acoustic_dissonance_detected', False)}
+"""
+        
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_message}
+            ],
+            "stream": False,
+            "options": {
+                "temperature": 0.3
+            }
+        }
+
+        try:
+            logger.info("Sending voice interpretation request to Ollama local instance...")
+            response = requests.post(self.endpoint, json=payload, timeout=600)
+            response.raise_for_status()
+            
+            result_json = response.json()
+            interpretation = result_json.get("message", {}).get("content", "")
+            if not interpretation:
+                raise ValueError("Received empty response from the local reasoning model.")
+                
+            return interpretation
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to communicate with local Ollama service: {str(e)}")
+            raise RuntimeError(f"Ollama API request failed: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error in reasoning model interpretation: {str(e)}")
+            raise
+
 
 if __name__ == "__main__":
     import sys

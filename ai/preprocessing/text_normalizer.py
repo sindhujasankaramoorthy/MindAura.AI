@@ -148,14 +148,44 @@ class TextNormalizer:
         # 4. Token-Level Language Detection (runs on protected text)
         from .language_detector import TokenLanguage
         token_classifications = self.advanced_corrector.language_detector.detect(protected_text, [], pipeline=pipeline)
-        token_langs_str = ", ".join([f"'{token}': {lang}" for token, lang in token_classifications if token.strip()])
-        logger.info(f"Language Detection: [{token_langs_str}]")
+        
+        # Calculate Sentence Analysis stats
+        eng_count = sum(1 for pred in token_classifications if pred[1] == 'English' and pred[0].strip())
+        tan_count = sum(1 for pred in token_classifications if pred[1] == 'Tanglish' and pred[0].strip())
+        total_valid = eng_count + tan_count or 1
+        
+        sentence_analysis = (
+            "Sentence Analysis\n\n"
+            "Sentence Language Confidence:\n"
+            f"English: {(eng_count/total_valid)*100:.1f}%\n"
+            f"Tanglish: {(tan_count/total_valid)*100:.1f}%\n"
+            f"Mixed: {(100 if eng_count > 0 and tan_count > 0 else 0):.1f}%\n\n"
+            "Token Analysis\n"
+        )
+        
+        token_analysis_lines = []
+        for pred in token_classifications:
+            if not pred[0].strip():
+                continue
+            token_analysis_lines.append(
+                f"Token: {pred[0]}\n"
+                f"Language: {pred[1]}\n"
+                f"Confidence: {getattr(pred, 'confidence', 1.0)}\n"
+                f"Reason: {getattr(pred, 'reason', 'Unknown')}\n"
+            )
+            
+        logger.info(sentence_analysis + "\n".join(token_analysis_lines))
 
         initial_lang_info = self.detect_language(text)
         
         # 5. Pipeline execution (English Spell Correction, Tanglish Autocorrect -> IndicXlit -> AI4Bharat)
-        corrected = self.advanced_corrector.correct(protected_text, pipeline=pipeline)
-        logger.info(f"After Correction: '{corrected}'")
+        corrected, stages_dict, transliteration_map = self.advanced_corrector.correct(protected_text, pipeline=pipeline)
+        
+        logger.info("After Autocorrect:\n" + stages_dict.get("autocorrect", corrected))
+        logger.info("After Phrase Normalization:\n" + stages_dict.get("phrase", corrected))
+        logger.info("After Canonical Normalization:\n" + stages_dict.get("canonical", corrected))
+        logger.info("After IndicXlit:\n" + stages_dict.get("indic", corrected))
+        logger.info(f"After Correction (Final string from chunk processing): '{corrected}'")
 
         # 8. Context Correction (slang replacement)
         context_corrected = self.advanced_corrector.context_correct(corrected)
@@ -200,11 +230,14 @@ class TextNormalizer:
             except Exception as e:
                 logger.error(f"Translation failed, falling back to processed text: {e}")
                 translated_text = final_text
+                
+        logger.info(f"After Tamil→English Translation:\n{translated_text}")
 
         # Build Metadata
         metadata = []
         tanglish_meta_idx = 0
-        for token, lang in token_classifications:
+        for token_pred in token_classifications:
+            token, lang = token_pred
             if not token.strip():
                 continue
                 
@@ -221,8 +254,15 @@ class TextNormalizer:
                 if m:
                     ner_type = m.group(1)
                     
-            # Check for elongation in original text (rudimentary check on token)
-            has_elongation = bool(re.search(r'(.)\1{2,}', token))
+            # Determine Expressive Texting (Elongation) metadata
+            m = re.search(r'(.)\1{2,}', token)
+            is_english_elongation = bool(m)
+            elongation_character = m.group(1) if m else None
+            elongation_count = 0
+            if m:
+                m2 = re.search(f'({re.escape(elongation_character)}{{3,}})', token)
+                if m2:
+                    elongation_count = len(m2.group(1))
             
             # Get corrected token simulation to see if it was modified
             corrected_token = token
@@ -230,47 +270,52 @@ class TextNormalizer:
             
             # Use TokenLanguage string representations
             lang_str = str(lang)
-            tanglish_info = {}
             translated_token = token
-            confidence = 100.0
+            canonical_token = token
+            transliterated_token = token
             
             if lang_str == 'TokenLanguage.ENGLISH' or lang_str == 'English':
                 cands = self.advanced_corrector.correct_english_token(token)
                 if cands and cands[0] != token:
                     corrected_token = cands[0]
                     was_corrected = True
+                canonical_token = corrected_token
+                transliterated_token = corrected_token
             elif lang_str == 'TokenLanguage.TANGLISH' or lang_str == 'Tanglish':
                 cand = self.advanced_corrector.correct_tanglish_token(token)
                 if cand != token:
                     corrected_token = cand
                     was_corrected = True
                         
-                # Compute translated token for Tanglish
+                from ai.preprocessing.tanglish_canonical import normalize_canonical_tanglish
+                canonical_token = normalize_canonical_tanglish(corrected_token)
+                transliterated_token = transliteration_map.get(canonical_token, canonical_token)
                 translated_token = normalize_tanglish_semantics(corrected_token)
-                confidence = tanglish_info.get("confidence", 100.0)
+            
+            elongation_base_word = corrected_token if is_english_elongation else None
                     
             meta_obj = {
                 "original_token": token,
-                "detected_language": lang_str,
                 "corrected_token": corrected_token,
-                "translated_token": translated_token,
-                "confidence": confidence,
                 "normalized_token": token,
+                "canonical_token": canonical_token,
+                "transliterated_token": transliterated_token,
+                "translated_token": translated_token,
                 "final_token": corrected_token, # Approximation of final token
-                "language": lang_str,
+                "detected_language": lang_str,
+                "was_corrected": was_corrected,
+                "is_english_elongation": is_english_elongation,
+                "elongation_character": elongation_character,
+                "elongation_count": elongation_count,
+                "elongation_base_word": elongation_base_word,
+                # Additional fields to preserve compatibility
                 "is_ner_placeholder": is_ner_placeholder,
                 "ner_type": ner_type,
                 "ner_original_word": ner_original_word,
-                "normalization_type": normalization_type,
-                "has_elongation": has_elongation,
-                "has_punctuation": is_punct,
-                "was_corrected": was_corrected,
+                # New fields for Context-Aware Detector
+                "language_confidence": getattr(token_pred, 'confidence', 1.0),
+                "language_reason": getattr(token_pred, 'reason', "Unknown")
             }
-            # Merge extra tanglish info if any
-            for k, v in tanglish_info.items():
-                if k not in meta_obj:
-                    meta_obj[f"tanglish_{k}"] = v
-                    
             metadata.append(meta_obj)
 
         return {

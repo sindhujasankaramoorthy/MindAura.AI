@@ -267,6 +267,50 @@ def predict_emotion(audio_path: str, text_emotions: List[Dict[str, Any]] = None)
 
 if __name__ == "__main__":
     import json
+    import sys
+    
+    # Add project root to sys.path so we can import from ai.inference
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if project_root not in sys.path:
+        sys.path.append(project_root)
+        
+    try:
+        from ai.inference.qwen_reasoning import QwenReasoning
+    except ImportError:
+        QwenReasoning = None
+        print("Warning: Could not import QwenReasoning")
+
     audio_path = os.path.join(os.path.dirname(__file__), "recordings", "recording.wav")
-    emotion, confidence, result_json = predict_emotion(audio_path, [{"label": "disappointment", "score": 0.8}])
+    # You can also pass a file argument to test specific files
+    if len(sys.argv) > 1:
+        audio_path = sys.argv[1]
+        
+    dummy_text_emotions = [{"label": "disappointment", "score": 0.8}]
+    
+    print("=" * 60)
+    print("1. Running Emotion Prediction...")
+    emotion, confidence, result_json = predict_emotion(audio_path, dummy_text_emotions)
     print(json.dumps(result_json, indent=4))
+    
+    if QwenReasoning:
+        print("\n" + "=" * 60)
+        print("2. Generating Qwen Interpretation (Standalone Test)...")
+        # Construct a mock pipeline result to feed the voice reasoner
+        mock_pipeline_result = {
+            "transcript": "(Standalone testing - no transcript available)",
+            "raw_vocal_emotion": result_json,
+            "raw_text_emotions": dummy_text_emotions,
+            "fusion_analysis": {
+                "top_text_emotion": dummy_text_emotions[0]["label"],
+                "mental_health_distress_score": 50, # Mock score
+                "risk_level": "Unknown",
+                "acoustic_dissonance_detected": False
+            }
+        }
+        
+        try:
+            reasoner = QwenReasoning()
+            interpretation = reasoner.interpret_voice(mock_pipeline_result)
+            print("\n" + interpretation)
+        except Exception as e:
+            print(f"\n❌ Qwen Interpretation failed: {e}")

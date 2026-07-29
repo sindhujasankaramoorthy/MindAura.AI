@@ -9,12 +9,21 @@ try:
     from ai.voice.speech_to_text import transcribe_audio
     from ai.voice.text_emotion import TextEmotionAnalyzer
     from ai.voice.fusion_engine import EmotionFusionEngine
+    from ai.inference.qwen_reasoning import QwenReasoning
 except ImportError:
     from recorder import SmartRecorder
     from emotion_predict import predict_emotion
     from speech_to_text import transcribe_audio
     from text_emotion import TextEmotionAnalyzer
     from fusion_engine import EmotionFusionEngine
+    
+    # Add project root to sys.path to import from ai.inference
+    import sys
+    import os
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if project_root not in sys.path:
+        sys.path.append(project_root)
+    from ai.inference.qwen_reasoning import QwenReasoning
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -78,6 +87,18 @@ def run_voice_pipeline(audio_file_path=None):
         "raw_text_emotions": text_emotions,
         "fusion_analysis": mental_health_analysis
     }
+    
+    print("\n[4/4] Generating Psychiatrist Interpretation via Qwen...")
+    try:
+        reasoner = QwenReasoning()
+        interpretation = reasoner.interpret_voice(result)
+        result["qwen_interpretation"] = interpretation
+        print(f"\n{'─' * 60}")
+        print(interpretation)
+        print(f"{'─' * 60}")
+    except Exception as e:
+        print(f"\n⚠️ Could not generate Qwen interpretation: {e}")
+        result["qwen_interpretation"] = None
     
     print("\n" + "=" * 60)
     print("Pipeline Complete")

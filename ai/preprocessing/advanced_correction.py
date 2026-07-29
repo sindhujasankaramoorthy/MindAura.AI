@@ -411,10 +411,11 @@ class EmotionPreservingCorrector:
             logger.warning(f"Tanglish autocorrect failed: {e}")
             return word
 
-    def correct(self, text: str, pipeline: str = "UNKNOWN") -> str:
+    def correct(self, text: str, pipeline: str = "UNKNOWN") -> tuple:
         """
         Applies Context-Aware Auto Correction with separate English and Tanglish paths.
         Negation recovery runs first to protect negation contractions from SymSpell corruption.
+        Returns: (final_sentence, stages_dict, transliteration_map)
         """
         # Step 0: Recover negations FIRST (before spell correction corrupts them)
         text = self.recover_negations(text)
@@ -468,30 +469,25 @@ class EmotionPreservingCorrector:
                 candidate_options.append([(word, lang, True)])
 
         # ── Indic Chunk Translation ─────────────────────────────────────────
-        # Group consecutive Indic-sentinel entries (including any UNKNOWN
-        # delimiter entries between them) into chunks and translate each chunk
-        # as a single string so IndicTrans2 receives full sentence context
-        # instead of isolated words.
-        merged_options: list = []
+        merged_options_autocorrect = []
+        merged_options_phrase = []
+        merged_options_canonical = []
+        merged_options_indic = []
+        merged_options_translated = []
+        transliteration_map = {}
+        
         i = 0
         while i < len(candidate_options):
             slot = candidate_options[i]
 
-            # Detect an Indic sentinel slot
             if (slot and isinstance(slot[0], tuple) and
                     len(slot[0]) == 3 and slot[0][2] is True):
                 chunk_lang = slot[0][1]
-                chunk_parts: list = [slot[0][0]]  # first Indic word
+                chunk_parts: list = [slot[0][0]]
                 j = i + 1
 
-                # Absorb subsequent slots that are either:
-                #   a) another Indic token of the SAME language, or
-                #   b) a pure delimiter (UNKNOWN) that sits between Indic tokens
-                #      of the same language (preserves spaces/punctuation).
                 while j < len(candidate_options):
                     next_slot = candidate_options[j]
-
-                    # Next slot is another Indic sentinel of the same language
                     if (next_slot and isinstance(next_slot[0], tuple) and
                             len(next_slot[0]) == 3 and next_slot[0][2] is True and
                             next_slot[0][1] == chunk_lang):
@@ -499,8 +495,6 @@ class EmotionPreservingCorrector:
                         j += 1
                         continue
 
-                    # Next slot is a delimiter — include it only when the slot
-                    # after it is still the same Indic language.
                     if (next_slot and len(next_slot) == 1 and
                             isinstance(next_slot[0], str)):
                         if next_slot[0].startswith("<") and next_slot[0].endswith(">") and "_" in next_slot[0]:
@@ -515,63 +509,101 @@ class EmotionPreservingCorrector:
                                 continue
                     break
 
-                # Translate the entire chunk as one string so the model receives
-                # full sentence/paragraph context rather than isolated words.
                 full_chunk = "".join(chunk_parts)
                 
                 if chunk_lang == 'TANGLISH_CHUNK':
-                    logger.debug("Before emotion phrase normalization:")
+                    # 1. Autocorrect chunk
+                    chunk_autocorrect = full_chunk
+                    
+                    # 2. Phrase normalization
                     try:
                         from ai.preprocessing.emotion_phrase_normalizer import normalize_emotion_phrases
-                        full_chunk = normalize_emotion_phrases(full_chunk)
+                        chunk_phrase = normalize_emotion_phrases(full_chunk)
                     except Exception as e:
                         logger.error(f"Phrase normalization failed: {e}")
-                    logger.debug("After emotion phrase normalization:")
+                        chunk_phrase = full_chunk
                     
-                    # Canonical Normalization
+                    # 3. Canonical Normalization
                     try:
                         from ai.preprocessing.tanglish_canonical import normalize_canonical_tanglish_sentence
-                        full_chunk = normalize_canonical_tanglish_sentence(full_chunk)
+                        chunk_canonical = normalize_canonical_tanglish_sentence(chunk_phrase)
                     except Exception as e:
                         logger.error(f"Canonical normalization failed: {e}")
+                        chunk_canonical = chunk_phrase
                         
-                    logger.debug("Before IndicXlit:")
+                    # 4. IndicXlit
                     try:
                         from ai.transliteration.tanglish_to_tamil import TanglishToTamil
-                        transliterated = TanglishToTamil.get_instance().transliterate_sentence(full_chunk)
+                        chunk_indic = TanglishToTamil.get_instance().transliterate_sentence(chunk_canonical)
                     except Exception as e:
                         logger.error(f"Failed to transliterate: {e}")
-                        transliterated = full_chunk
+                        chunk_indic = chunk_canonical
                         
-                    logger.debug("Before translation:")
-                    translated_chunk = self.translate_indic(transliterated, 'TAMIL')
-                    merged_options.append([translated_chunk])
+                    # Build token alignment map
+                    can_words = re.findall(r'\S+', chunk_canonical)
+                    ind_words = re.findall(r'\S+', chunk_indic)
+                    if len(can_words) == len(ind_words):
+                        for c, w in zip(can_words, ind_words):
+                            transliteration_map[c] = w
+                            
+                    # 5. Skip translation here (moved to final step in text_normalizer)
+                    
+                    merged_options_autocorrect.append([chunk_autocorrect])
+                    merged_options_phrase.append([chunk_phrase])
+                    merged_options_canonical.append([chunk_canonical])
+                    merged_options_indic.append([chunk_indic])
                 else:
-                    logger.debug("Before translation:")
-                    translated_chunk = self.translate_indic(full_chunk, chunk_lang)
-                    merged_options.append([translated_chunk])
+                    merged_options_autocorrect.append([full_chunk])
+                    merged_options_phrase.append([full_chunk])
+                    merged_options_canonical.append([full_chunk])
+                    merged_options_indic.append([full_chunk])
                     
                 i = j
             else:
-                merged_options.append(slot)
+                merged_options_autocorrect.append(slot)
+                merged_options_phrase.append(slot)
+                merged_options_canonical.append(slot)
+                merged_options_indic.append(slot)
                 i += 1
 
-        if not has_misspelling or not self._has_context_model:
-            return "".join([opts[0] for opts in merged_options])
+        def build_string(options_list, combo_indices):
+            parts = []
+            for idx, slot_opts in zip(combo_indices, options_list):
+                parts.append(slot_opts[idx if idx < len(slot_opts) else 0])
+            return "".join(parts)
 
-        # MLM scoring for English candidates
-        combinations = list(itertools.islice(itertools.product(*merged_options), 100))
-        best_sentence = text
-        best_score = float('inf')
+        best_combo = tuple(0 for _ in merged_options_indic)
+        
+        stages_dict = {
+            "autocorrect": build_string(merged_options_autocorrect, best_combo),
+            "phrase": build_string(merged_options_phrase, best_combo),
+            "canonical": build_string(merged_options_canonical, best_combo),
+            "indic": build_string(merged_options_indic, best_combo),
+        }
+        
+        corrected = stages_dict["indic"]
+        
+        if has_misspelling and self._has_context_model:
+            ranges = [range(len(opts)) for opts in merged_options_indic]
+            combinations = list(itertools.islice(itertools.product(*ranges), 100))
+            best_score = float('inf')
 
-        for combo in combinations:
-            candidate_sentence = "".join(combo)
-            score = self._score_sentence(candidate_sentence)
-            if score < best_score:
-                best_score = score
-                best_sentence = candidate_sentence
+            for combo in combinations:
+                candidate_sentence = build_string(merged_options_indic, combo)
+                score = self._score_sentence(candidate_sentence)
+                if score < best_score:
+                    best_score = score
+                    corrected = candidate_sentence
+                    best_combo = combo
 
-        return best_sentence
+        stages = {
+            "autocorrect": build_string(merged_options_autocorrect, best_combo),
+            "phrase": build_string(merged_options_phrase, best_combo),
+            "canonical": build_string(merged_options_canonical, best_combo),
+            "indic": build_string(merged_options_indic, best_combo)
+        }
+
+        return corrected, stages, transliteration_map
 
     def context_correct(self, text: str) -> str:
         processed = text
@@ -634,7 +666,7 @@ class EmotionPreservingCorrector:
             protected_text, placeholder_map = text, {}
 
         # 2. Context-Aware Auto Correction (English + Tanglish paths)
-        step1 = self.correct(protected_text)
+        step1, _, _ = self.correct(protected_text)
         logger.debug(f"[AdvancedCorrection] After Correction: '{step1}'")
 
         # 3. Context Correction (slang replacement)

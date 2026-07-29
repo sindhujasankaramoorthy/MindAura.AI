@@ -14,7 +14,8 @@ TANGLISH_PARTICLES = {
     "iruku", "irukku", "enaku", "enakku", "unaku", "unakku",
     "rendu", "perum", "peru", "varum", "tharum",
     "ku", "nu", "inga", "anga", "enga",
-    "avan", "aval", "avar", "avanga", "ivanga"
+    "avan", "aval", "avar", "avanga", "ivanga",
+    "dee", "dei", "machi", "macha", "d"
 }
 
 # Strong English words that often get absorbed by the Tanglish vocabulary due to code-mixing

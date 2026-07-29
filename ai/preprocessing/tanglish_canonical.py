@@ -8,13 +8,20 @@ logger = logging.getLogger(__name__)
 # This should NOT translate to English; it only fixes spoken/shortened Tanglish
 # so that IndicXlit can map them cleanly to Tamil script.
 CANONICAL_TANGLISH_MAPPING: Dict[str, str] = {
+    "enaku": "enakku",
+    "ennaku": "enakku",
+    "enaaku": "enakku",
     "mudla": "mudiyala",
-    "enmaku": "enaku",
+    "enmaku": "enakku",
     "kastama": "kashtama",
     "kuda": "kooda",
     "purila": "puriyala",
-    "pudikula": "pudikala",
-    "pidikula": "pidikala",
+    "pidikala": "pidikkala",
+    "pidikula": "pidikkala",
+    "pudikala": "pidikkala",
+    "pudikula": "pidikkala",
+    "iruku": "irukku",
+    "romba": "romba",
     "bayama": "bayama",
 }
 
