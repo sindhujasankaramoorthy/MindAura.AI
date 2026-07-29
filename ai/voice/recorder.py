@@ -12,9 +12,9 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 try:
-    from ai.voice.audio_preprocessing import preprocess_audio
+    from ai.voice.audio_preprocessing import bandpass_filter, reduce_noise, normalize_audio
 except ImportError:
-    from audio_preprocessing import preprocess_audio
+    from audio_preprocessing import bandpass_filter, reduce_noise, normalize_audio
 
 
 class SmartRecorder:
@@ -279,11 +279,20 @@ class SmartRecorder:
         audio = np.concatenate(recorded_chunks, axis=0)
 
         print("[CLEAN] Cleaning audio with smooth noise reduction...")
-        audio = preprocess_audio(
-            audio,
-            sample_rate=self.SAMPLE_RATE,
-            noise_clip=self.noise_clip
+        
+        audio_filtered = bandpass_filter(audio, sr=self.SAMPLE_RATE)
+        noise_clip_filtered = None
+        if self.noise_clip is not None and len(self.noise_clip) > 0:
+            noise_clip_filtered = bandpass_filter(self.noise_clip, sr=self.SAMPLE_RATE)
+            
+        audio_denoised = reduce_noise(
+            audio_filtered,
+            sr=self.SAMPLE_RATE,
+            noise_clip=noise_clip_filtered,
+            prop_decrease=0.60
         )
+        
+        audio = normalize_audio(audio_denoised)
 
         output_path = os.path.join(self.recordings_dir, filename)
         sf.write(output_path, audio, self.SAMPLE_RATE)

@@ -1,0 +1,76 @@
+i^^^^^^^^XXmport os
+import sys
+import torch
+import librosa
+
+from transformers import (
+    AutoProcessor,
+    AutoModelForAudioClassification
+)
+
+# ------------------------------------
+# UTF-8 Console Support
+# ------------------------------------
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+MODEL_NAME = "superb/wav2vec2-base-superb-er"
+
+print("=" * 60)
+print("Loading Speech Emotion Recognition Model...")
+print("=" * 60)
+
+processor = AutoProcessor.from_pretrained(MODEL_NAME)
+
+model = AutoModelForAudioClassification.from_pretrained(
+    MODEL_NAME
+)
+
+model.eval()
+
+print("\n✅ Model Loaded Successfully!\n")
+
+
+def predict_emotion(audio_path):
+
+    audio, sr = librosa.load(
+        audio_path,
+        sr=16000,
+        mono=True
+    )
+
+    inputs = processor(
+        audio,
+        sampling_rate=16000,
+        return_tensors="pt"
+    )
+
+    with torch.no_grad():
+
+        outputs = model(**inputs)
+
+    probs = torch.softmax(
+        outputs.logits,
+        dim=-1
+    )[0]
+
+    best = torch.argmax(probs).item()
+
+    emotion = model.config.id2label[best]
+=
+    confidence = probs[best].item()
+
+    return emotion, confidence, probs
+
+
+if __name__ == "__main__":
+
+    audio_path = os.path.join(
+        os.path.dirname(__file__),
+        "recordings",
+        "recording.wav"
+    )
+
+    emotion, confidence, probs = predict_emotion(audio_path)
+
+    print("=" * 60
