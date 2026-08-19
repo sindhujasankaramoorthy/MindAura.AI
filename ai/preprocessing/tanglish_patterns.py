@@ -1,6 +1,8 @@
 import re
 from typing import List, Tuple
 
+from .lexical_constants import ZIPF_ENGLISH_THRESHOLD_STRICT, fuzzy_match_tanglish
+
 # Minimal fallback dictionaries (only for unique idioms/phrases that cannot be translated word-by-word)
 PHRASE_REPLACEMENTS: List[Tuple[str, str]] = []
 
@@ -249,29 +251,27 @@ def normalize_tanglish_semantics(text: str) -> str:
             
     # 2b. Fuzzy Matching Fallback
     try:
-        from rapidfuzz import process, fuzz
         from wordfreq import zipf_frequency as z
-        
+
         words = processed.split()
         fuzzy_corrected_words = []
         semantic_keys = [k for k in WORD_REPLACEMENTS.keys() if " " not in k]
-        
+
         for w in words:
             # Extract just alphabetic characters for matching
             alpha_w = re.sub(r'[^a-zA-Z]', '', w).lower()
             if not alpha_w:
                 fuzzy_corrected_words.append(w)
                 continue
-                
-            # Skip if it is a common English word (zipf > 4.0 is very common)
+
+            # Skip if it is a common English word (very unlikely to be Tanglish)
             # We don't want to accidentally translate valid English words
-            if z(alpha_w, "en") > 3.8:
+            if z(alpha_w, "en") > ZIPF_ENGLISH_THRESHOLD_STRICT:
                 fuzzy_corrected_words.append(w)
                 continue
-                
-            match = process.extractOne(alpha_w, semantic_keys, scorer=fuzz.ratio)
-            if match and match[1] >= 85.0:
-                matched_key = match[0]
+
+            matched_key = fuzzy_match_tanglish(alpha_w, semantic_keys)
+            if matched_key is not None:
                 replacement = WORD_REPLACEMENTS[matched_key]
                 if replacement == "":
                     continue # Remove word
@@ -280,7 +280,7 @@ def normalize_tanglish_semantics(text: str) -> str:
                     fuzzy_corrected_words.append(w.replace(alpha_w, replacement))
             else:
                 fuzzy_corrected_words.append(w)
-                
+
         processed = " ".join(fuzzy_corrected_words)
     except Exception as e:
         import logging

@@ -1,9 +1,9 @@
 import logging
 import json
+import math
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, List
-from transformers import pipeline, AutoModelForSequenceClassification, AutoTokenizer, AutoModelForSeq2SeqLM
-import torch
+from transformers import pipeline
 import langdetect
 import re
 
@@ -16,6 +16,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
 from ai.preprocessing.text_normalizer import TextNormalizer
 from ai.inference.psychological_signals import PsychologicalSignalExtractor
+from ai.model_registry import get_roberta_go_emotions, get_nllb_600m
 
 
 class EmotionAnalyzer:
@@ -26,20 +27,22 @@ class EmotionAnalyzer:
     
     def __init__(self):
         """
-        Initialize the EmotionAnalyzer.
-        Loads the tokenizer and model for SamLowe/roberta-base-go_emotions.
+        Initialize the EmotionAnalyzer. Model loading is deferred until first
+        use (see the `classifier`/`trans_tokenizer`/`trans_model` properties
+        below), all backed by the shared ai.model_registry.ModelRegistry so
+        the RoBERTa/NLLB checkpoints are loaded at most once per process.
         """
         self.model_name = "SamLowe/roberta-base-go_emotions"
         self.normalizer = TextNormalizer()
         self.signal_extractor = PsychologicalSignalExtractor()
-        
+
         self.NLLB_LANG_CODES = {
             'en': 'eng_Latn', 'ta': 'tam_Taml', 'hi': 'hin_Deva', 'te': 'tel_Telu',
             'ml': 'mal_Mlym', 'kn': 'kan_Knda', 'bn': 'ben_Beng', 'mr': 'mar_Deva',
             'fr': 'fra_Latn', 'es': 'spa_Latn', 'de': 'deu_Latn', 'ar': 'arb_Arab',
             'zh-cn': 'zho_Hans', 'zh-tw': 'zho_Hant', 'zh': 'zho_Hans'
         }
-        
+
         # Define all 28 GoEmotions labels
         self.ALL_GOEMOTIONS = [
             "admiration", "amusement", "anger", "annoyance", "approval", "caring",
@@ -48,49 +51,47 @@ class EmotionAnalyzer:
             "joy", "love", "nervousness", "optimism", "pride", "realization",
             "relief", "remorse", "sadness", "surprise", "neutral"
         ]
-        
-        try:
-            # 1. Tokenizer loading
-            # AutoTokenizer handles text preprocessing, breaking down sentences into tokens
-            # that the RoBERTa model can understand.
-            logger.info(f"Loading tokenizer for {self.model_name}...")
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            
-            # 2. Model loading
-            # AutoModelForSequenceClassification loads the pre-trained weights
-            # for the sequence classification task (predicting emotions).
-            logger.info(f"Loading model for {self.model_name}...")
-            self.model = AutoModelForSequenceClassification.from_pretrained(self.model_name)
-            
-            # Determine if GPU is available
-            self.device = 0 if torch.cuda.is_available() else -1
-            logger.info(f"Using device: {'GPU' if self.device == 0 else 'CPU'}")
-            
-            # Initialize the pipeline for easy inference
+
+        self.translation_model_name = "facebook/nllb-200-distilled-600M"
+
+        self._classifier = None
+        self._device = None
+        self._trans_tokenizer = None
+        self._trans_model = None
+
+    @property
+    def device(self) -> int:
+        if self._device is None:
+            _, _, self._device = get_roberta_go_emotions()
+        return self._device
+
+    @property
+    def classifier(self):
+        """Lazily-built text-classification pipeline over the shared RoBERTa GoEmotions model."""
+        if self._classifier is None:
+            tokenizer, model, device = get_roberta_go_emotions()
+            self._device = device
             # top_k=None ensures we get confidence scores for all supported GoEmotions labels
-            self.classifier = pipeline(
-                "text-classification", 
-                model=self.model, 
-                tokenizer=self.tokenizer, 
-                top_k=None, 
-                device=self.device
+            self._classifier = pipeline(
+                "text-classification",
+                model=model,
+                tokenizer=tokenizer,
+                top_k=None,
+                device=device
             )
-            
-            # 3. Translation model loading
-            self.translation_model_name = "facebook/nllb-200-distilled-600M"
-            logger.info(f"Loading tokenizer for {self.translation_model_name}...")
-            self.trans_tokenizer = AutoTokenizer.from_pretrained(self.translation_model_name)
-            
-            logger.info(f"Loading model for {self.translation_model_name}...")
-            self.trans_model = AutoModelForSeq2SeqLM.from_pretrained(self.translation_model_name)
-            if self.device == 0:
-                self.trans_model = self.trans_model.to('cuda')
-                
-            logger.info("EmotionAnalyzer initialized successfully.")
-            
-        except Exception as e:
-            logger.error(f"Failed to load model or tokenizer: {str(e)}")
-            raise
+        return self._classifier
+
+    @property
+    def trans_tokenizer(self):
+        if self._trans_tokenizer is None:
+            self._trans_tokenizer, self._trans_model, self._device = get_nllb_600m()
+        return self._trans_tokenizer
+
+    @property
+    def trans_model(self):
+        if self._trans_model is None:
+            self._trans_tokenizer, self._trans_model, self._device = get_nllb_600m()
+        return self._trans_model
 
 
     def _classify_emotions(self, inference_text: str) -> Dict[str, Any]:
@@ -230,15 +231,19 @@ class EmotionAnalyzer:
         # Scale to 0-100
         return min(100, max(0, int(avg_top * 100)))
 
-    def _calculate_diversity(self, scores: Dict[str, float], threshold: float = 0.05) -> int:
+    def _calculate_diversity(self, scores: Dict[str, float]) -> int:
         """
-        Calculate Emotional Diversity Score (0-100) based on how many significant emotions are present.
+        Calculate Emotional Diversity Score (0-100) via normalized Shannon entropy
+        of the emotion probability distribution.
         """
-        # Count how many emotions score above a certain significance threshold
-        significant_emotions = sum(1 for score in scores.values() if score > threshold)
-        
-        # Assuming ~10 distinct emotions active at once is 100% diversity
-        diversity = (significant_emotions / 10.0) * 100
+        probs = [p for p in scores.values() if p > 0]
+        if len(scores) <= 1 or not probs:
+            return 0
+
+        entropy = -sum(p * math.log(p) for p in probs)
+        max_entropy = math.log(len(scores))
+
+        diversity = (entropy / max_entropy) * 100
         return min(100, max(0, int(diversity)))
 
     def _calculate_complexity(self, top_scores: List[float]) -> int:

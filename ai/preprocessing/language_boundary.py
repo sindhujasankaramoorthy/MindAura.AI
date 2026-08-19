@@ -2,6 +2,8 @@ import logging
 import re
 from wordfreq import zipf_frequency as z
 
+from .lexical_constants import ZIPF_ENGLISH_THRESHOLD_STANDARD
+
 logger = logging.getLogger(__name__)
 
 # Very common Tanglish words that might overlap with obscure English words
@@ -64,7 +66,7 @@ def classify_sentence_language(text: str) -> dict:
         w_base = re.sub(r'(.)\1{2,}', r'\1', w)
         if w_base in ENGLISH_MISSPELLINGS or w_base in STRONG_ENGLISH_WORDS or w_base in INTERNET_SLANG:
             english_count += 1
-        elif w_base not in TANGLISH_PARTICLES and z(w_base, 'en') >= 3.0:
+        elif w_base not in TANGLISH_PARTICLES and z(w_base, 'en') >= ZIPF_ENGLISH_THRESHOLD_STANDARD:
             english_count += 1
             
     confidence = english_count / len(words)
@@ -87,9 +89,9 @@ def classify_token_language(token: str) -> str:
     if w_lower in STRONG_ENGLISH_WORDS:
         return "ENGLISH"
 
-    # High frequency English words (Zipf frequency > 3.0 is highly common in English)
+    # High frequency English words
     freq = z(w_lower, 'en')
-    if freq >= 3.0:
+    if freq >= ZIPF_ENGLISH_THRESHOLD_STANDARD:
         return "ENGLISH"
         
     # Check for title case (likely a name or proper noun)

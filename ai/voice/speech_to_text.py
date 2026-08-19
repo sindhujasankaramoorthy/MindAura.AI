@@ -1,6 +1,14 @@
 import os
 import sys
 
+try:
+    from ai.model_registry import get_faster_whisper
+except ImportError:
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if project_root not in sys.path:
+        sys.path.append(project_root)
+    from ai.model_registry import get_faster_whisper
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
@@ -10,12 +18,7 @@ def _load_model():
     global _model
     if _model is None:
         print("Loading Faster-Whisper model...")
-        from faster_whisper import WhisperModel
-        _model = WhisperModel(
-            "base",
-            device="cpu",
-            compute_type="int8"
-        )
+        _model = get_faster_whisper()
         print("[OK] Faster-Whisper Model loaded successfully.\n")
 
 def transcribe_audio(audio_path: str) -> str:

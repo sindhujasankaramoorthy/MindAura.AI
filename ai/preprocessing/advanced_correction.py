@@ -19,8 +19,8 @@ import itertools
 from symspellpy import SymSpell, Verbosity
 from typing import Set, Dict, List, Tuple, Optional
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
 
+from ai.model_registry import ModelRegistry, get_gpt2_perplexity_model, get_indictrans2
 from .tanglish_patterns import (
     normalize_tanglish_semantics, 
     WORD_REPLACEMENTS
@@ -28,45 +28,6 @@ from .tanglish_patterns import (
 from .language_detector import LanguageDetector, TokenLanguage
 
 logger = logging.getLogger(__name__)
-
-# Levenshtein distance helper
-def LevenshteinDistance(s1: str, s2: str) -> int:
-    if len(s1) < len(s2):
-        return LevenshteinDistance(s2, s1)
-    if len(s2) == 0:
-        return len(s1)
-    
-    previous_row = range(len(s2) + 1)
-    for i, c1 in enumerate(s1):
-        current_row = [i + 1]
-        for j, c2 in enumerate(s2):
-            insertions = previous_row[j + 1] + 1
-            deletions = current_row[j] + 1
-            substitutions = previous_row[j] + (c1 != c2)
-            current_row.append(min(insertions, deletions, substitutions))
-        previous_row = current_row
-        
-    return previous_row[-1]
-
-# Generalized phonetic tanglish mapping and distance helpers
-def tanglish_key(word: str) -> str:
-    w = word.lower()
-    # Collapse consecutive duplicate letters
-    w = re.sub(r'(.)\1+', r'\1', w)
-    # Common Romanized Tamil spelling variants mapped phonetically
-    w = w.replace('dh', 'd').replace('th', 'd').replace('t', 'd')
-    w = w.replace('zh', 'l').replace('r', 'l')
-    w = w.replace('w', 'v')
-    w = w.replace('sh', 's').replace('z', 's')
-    w = w.replace('g', 'k').replace('h', '')
-    # Vowels mappings
-    w = w.replace('oo', 'u').replace('ee', 'i').replace('aa', 'a').replace('ae', 'e').replace('ai', 'e')
-    # Reduce vowels to simplify mappings (e.g. u -> i, o -> u, e -> i)
-    w = w.replace('o', 'u').replace('u', 'i').replace('e', 'i')
-    return w
-
-def tanglish_distance(w1: str, w2: str) -> int:
-    return LevenshteinDistance(tanglish_key(w1), tanglish_key(w2))
 
 # ──────────────────────────────────────────────────────────────────────
 # A. NEGATION RECOVERY MAP — Configurable & Extensible
@@ -181,7 +142,6 @@ CUSTOM_OVERRIDES: Dict[str, str] = {
     "minf": "mind",
     "mnd": "mind",
     "lonley": "lonely",
-    "lonley": "lonely",
     "lonly": "lonely",
     "scard": "scared",
     "scrd": "scared",
@@ -192,10 +152,8 @@ CUSTOM_OVERRIDES: Dict[str, str] = {
     "ovrthnking": "overthinking",
     "depresed": "depressed",
     "depressd": "depressed",
-    "frustrated": "frustrated",
     "wurried": "worried",
     "wrried": "worried",
-    "lonly": "lonely",
     "painfull": "painful",
     "emty": "empty",
     "emtpy": "empty",
@@ -208,29 +166,30 @@ class EmotionPreservingCorrector:
     """
     EDIT_DISTANCE_RATIO_THRESHOLD = 0.6
 
-    def __init__(self):
-        self.sym_spell = SymSpell(max_dictionary_edit_distance=2, prefix_length=7)
+    @staticmethod
+    def _build_symspell() -> SymSpell:
+        sym_spell = SymSpell(max_dictionary_edit_distance=2, prefix_length=7)
 
         # Load the default English frequency dictionary
         try:
             ref = importlib.resources.files("symspellpy") / "frequency_dictionary_en_82_765.txt"
             with importlib.resources.as_file(ref) as path:
-                self.sym_spell.load_dictionary(str(path), term_index=0, count_index=1)
+                sym_spell.load_dictionary(str(path), term_index=0, count_index=1)
         except AttributeError:
             import pkg_resources
             dictionary_path = pkg_resources.resource_filename(
                 "symspellpy", "frequency_dictionary_en_82_765.txt"
             )
-            self.sym_spell.load_dictionary(dictionary_path, term_index=0, count_index=1)
+            sym_spell.load_dictionary(dictionary_path, term_index=0, count_index=1)
 
         # Boost protected words to max frequency
         for word in PROTECTED_WORDS:
-            self.sym_spell.create_dictionary_entry(word, 999_999_999)
+            sym_spell.create_dictionary_entry(word, 999_999_999)
 
         # Boost negation recovery map keys so they are recognized as exact matches
         # and won't be corrected by SymSpell (they will be expanded by recover_negations)
         for key in NEGATION_RECOVERY_MAP:
-            self.sym_spell.create_dictionary_entry(key, 999_999_999)
+            sym_spell.create_dictionary_entry(key, 999_999_999)
 
         # Boost common emotion/mental-health words that may be absent from standard dict
         _extra_emotional = [
@@ -242,42 +201,38 @@ class EmotionPreservingCorrector:
             "overthink", "overwhelm", "panic", "grief", "sorrow",
         ]
         for w in _extra_emotional:
-            self.sym_spell.create_dictionary_entry(w, 500_000_000)
+            sym_spell.create_dictionary_entry(w, 500_000_000)
 
         # Register canonical Tanglish roots in SymSpell so they are
         # "known" and never substituted as English typo corrections.
         # The LanguageDetector will still correctly route them as Tanglish.
-        from .tanglish_patterns import WORD_REPLACEMENTS
         for root in WORD_REPLACEMENTS:
-            self.sym_spell.create_dictionary_entry(root, 1)  # low freq = known but not English
+            sym_spell.create_dictionary_entry(root, 1)  # low freq = known but not English
+
+        return sym_spell
+
+    def __init__(self):
+        # SymSpell is local-file-backed (no network download) and needed by
+        # nearly every classify() call via LanguageDetector, so it stays
+        # eager — but routed through ModelRegistry so repeated
+        # EmotionPreservingCorrector() instantiations reuse one build.
+        self.sym_spell = ModelRegistry.get("symspell", self._build_symspell)
 
         # Pre-SymSpell overrides
         self._custom_overrides = CUSTOM_OVERRIDES
 
-        # Context Model (MLM)
-        model_name = "gpt2"
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self.mlm_model = AutoModelForCausalLM.from_pretrained(model_name)
-            self.mlm_model.eval()
-            self._has_context_model = True
-        except Exception as e:
-            logger.error(f"Failed to load MLM for context evaluation: {e}")
-            self._has_context_model = False
+        # Context Model (GPT2, perplexity scorer) — lazy: only loaded the
+        # first time a misspelling actually needs combinatorial scoring.
+        self._mlm_tokenizer = None
+        self._mlm_model = None
+        self._mlm_load_attempted = False
 
-        # IndicTrans2 Model
-        try:
-            from transformers import AutoModelForSeq2SeqLM
-            from IndicTransToolkit import IndicProcessor
-            indic_model_name = "ai4bharat/indictrans2-indic-en-1B"
-            self.indic_tokenizer = AutoTokenizer.from_pretrained(indic_model_name, trust_remote_code=True)
-            self.indic_model = AutoModelForSeq2SeqLM.from_pretrained(indic_model_name, trust_remote_code=True)
-            self.indic_model.eval()
-            self.indic_processor = IndicProcessor(inference=True)
-            self._has_indic_model = True
-        except Exception as e:
-            logger.error(f"Failed to load IndicTrans2 model: {e}")
-            self._has_indic_model = False
+        # IndicTrans2 — lazy: only loaded the first time translate_indic()
+        # is actually invoked (currently unwired; see implementation_plan.md).
+        self._indic_tokenizer = None
+        self._indic_model = None
+        self._indic_processor = None
+        self._indic_load_attempted = False
 
         # NER Protection Layer
         try:
@@ -289,10 +244,61 @@ class EmotionPreservingCorrector:
 
         # Language Detector
         self.language_detector = LanguageDetector(
-            self.sym_spell, 
-            PROTECTED_WORDS, 
+            self.sym_spell,
+            PROTECTED_WORDS,
             set(NEGATION_RECOVERY_MAP.keys())
         )
+
+    def _ensure_mlm_loaded(self) -> None:
+        if not self._mlm_load_attempted:
+            self._mlm_load_attempted = True
+            try:
+                self._mlm_tokenizer, self._mlm_model = get_gpt2_perplexity_model()
+            except Exception as e:
+                logger.error(f"Failed to load MLM for context evaluation: {e}")
+
+    @property
+    def _has_context_model(self) -> bool:
+        self._ensure_mlm_loaded()
+        return self._mlm_model is not None
+
+    @property
+    def tokenizer(self):
+        self._ensure_mlm_loaded()
+        return self._mlm_tokenizer
+
+    @property
+    def mlm_model(self):
+        self._ensure_mlm_loaded()
+        return self._mlm_model
+
+    def _ensure_indic_loaded(self) -> None:
+        if not self._indic_load_attempted:
+            self._indic_load_attempted = True
+            try:
+                self._indic_tokenizer, self._indic_model, self._indic_processor = get_indictrans2()
+            except Exception as e:
+                logger.error(f"Failed to load IndicTrans2 model: {e}")
+
+    @property
+    def _has_indic_model(self) -> bool:
+        self._ensure_indic_loaded()
+        return self._indic_model is not None
+
+    @property
+    def indic_tokenizer(self):
+        self._ensure_indic_loaded()
+        return self._indic_tokenizer
+
+    @property
+    def indic_model(self):
+        self._ensure_indic_loaded()
+        return self._indic_model
+
+    @property
+    def indic_processor(self):
+        self._ensure_indic_loaded()
+        return self._indic_processor
 
     def _score_sentence(self, sentence: str) -> float:
         if not self._has_context_model:
@@ -651,45 +657,3 @@ class EmotionPreservingCorrector:
             processed += '.'
 
         return re.sub(r'\s+', ' ', processed).strip()
-
-    def process(self, text: str) -> str:
-        """
-        Coordinates the complete preprocessing pipeline matching the target architecture.
-        """
-        logger.debug(f"[AdvancedCorrection] Raw Input: '{text}'")
-
-        # 1. NER Protection (detect and mask entities)
-        if self.ner_protection:
-            entities = self.ner_protection.detect_entities(text)
-            protected_text, placeholder_map = self.ner_protection.protect(text)
-        else:
-            protected_text, placeholder_map = text, {}
-
-        # 2. Context-Aware Auto Correction (English + Tanglish paths)
-        step1, _, _ = self.correct(protected_text)
-        logger.debug(f"[AdvancedCorrection] After Correction: '{step1}'")
-
-        # 3. Context Correction (slang replacement)
-        step2 = self.context_correct(step1)
-
-        # 4. Tanglish Semantic Normalization
-        step3 = normalize_tanglish_semantics(step2)
-        logger.debug(f"[AdvancedCorrection] After Semantic Normalization: '{step3}'")
-
-        # 5. Negation Recovery
-        step4 = self.recover_negations(step3)
-
-        # 6. Phrase Standardization
-        step5 = self.standardize_phrases(step4)
-
-        # 7. Sentence Reconstruction
-        step6 = self.reconstruct_sentence(step5)
-
-        # 8. NER Restoration
-        if self.ner_protection:
-            final_text = self.ner_protection.restore(step6, placeholder_map)
-        else:
-            final_text = step6
-
-        logger.debug(f"[AdvancedCorrection] Final Emotion Input: '{final_text}'")
-        return final_text

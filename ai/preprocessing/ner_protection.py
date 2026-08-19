@@ -67,26 +67,38 @@ class NERProtection:
     }
 
     def __init__(self):
+        # GLiNER/BERT-NER are loaded lazily on first detect_entities() call via
+        # the shared ModelRegistry (see _get_gliner/_get_bert_ner below), rather
+        # than eagerly here, so constructing NERProtection is cheap and the
+        # models are only pulled in when NER is actually needed.
         self._gliner: Optional[object] = None
         self._bert_ner = None
+        self._gliner_load_attempted = False
+        self._bert_ner_load_attempted = False
 
-        # --- Attempt 1: GLiNER tiny ---
-        try:
-            from gliner import GLiNER  # type: ignore
-            logger.info("Initializing NER Protection Layer (NeuML/gliner-bert-tiny)…")
-            self._gliner = GLiNER.from_pretrained("NeuML/gliner-bert-tiny")
-            logger.info("GLiNER loaded successfully.")
-        except Exception as exc:
-            logger.warning(f"GLiNER unavailable ({exc}).")
+    def _get_gliner(self):
+        if not self._gliner_load_attempted:
+            self._gliner_load_attempted = True
+            try:
+                from ai.model_registry import get_gliner_ner
+                logger.info("Initializing NER Protection Layer (NeuML/gliner-bert-tiny)…")
+                self._gliner = get_gliner_ner()
+                logger.info("GLiNER loaded successfully.")
+            except Exception as exc:
+                logger.warning(f"GLiNER unavailable ({exc}).")
+        return self._gliner
 
-        # --- Attempt 2: BERT-NER ---
-        try:
-            from transformers import pipeline  # type: ignore
-            logger.info("Loading NER model dslim/bert-base-NER-uncased…")
-            self._bert_ner = pipeline("ner", model="dslim/bert-base-NER-uncased")
-            logger.info("BERT NER model loaded successfully.")
-        except Exception as exc:
-            logger.warning(f"BERT NER model unavailable ({exc}).")
+    def _get_bert_ner(self):
+        if not self._bert_ner_load_attempted:
+            self._bert_ner_load_attempted = True
+            try:
+                from ai.model_registry import get_bert_ner_fallback
+                logger.info("Loading NER model dslim/bert-base-NER-uncased…")
+                self._bert_ner = get_bert_ner_fallback()
+                logger.info("BERT NER model loaded successfully.")
+            except Exception as exc:
+                logger.warning(f"BERT NER model unavailable ({exc}).")
+        return self._bert_ner
 
     # ──────────────────────────────────────────────────────────────
     # Internal helpers
@@ -280,9 +292,9 @@ class NERProtection:
         Returns a sorted list of ``(start, end, type, original_word)`` tuples.
         """
         raw = []
-        if self._bert_ner is not None:
+        if self._get_bert_ner() is not None:
             raw.extend(self._detect_bert(text))
-        if self._gliner is not None:
+        if self._get_gliner() is not None:
             gliner_raw = self._detect_gliner(text)
             for g_ent in gliner_raw:
                 gs, ge, gt, gw = g_ent

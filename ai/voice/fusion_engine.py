@@ -2,6 +2,17 @@ class EmotionFusionEngine:
     """
     Fuses Voice Acoustic Emotion and Text Sentiment Emotion
     to calculate a Mental Health / Distress Score.
+
+    IMPORTANT: mental_health_distress_score and risk_level are a rule-based
+    heuristic — a hand-tuned weighted sum over emotion probabilities, not a
+    clinical or diagnostic assessment, and not validated against any
+    clinical outcome data. Treat them as an internal triage signal only.
+    This is a deliberate departure from ai.inference.qwen_reasoning's
+    SYSTEM_PROMPT, which explicitly forbids the LLM from estimating risk or
+    classifying severity/distress level for the same reason: an unqualified
+    risk label in a mental-health tool carries real safety/liability weight.
+    Whichever surface consumes this score (API response, UI, logs) must
+    carry the same caveat forward rather than presenting it as authoritative.
     """
     
     def __init__(self):
@@ -103,6 +114,10 @@ class EmotionFusionEngine:
         return {
             "mental_health_distress_score": mental_health_score,
             "risk_level": risk_level,
+            "disclaimer": (
+                "Heuristic rule-based estimate, not a clinical or diagnostic "
+                "assessment. Not validated against clinical outcome data."
+            ),
             "top_text_emotion": top_text_emotion,
             "vocal_emotion": vocal_emotion,
             "acoustic_dissonance_detected": dissonance,
