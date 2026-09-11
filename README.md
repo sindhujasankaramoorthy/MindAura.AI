@@ -1,4 +1,4 @@
-# 🧠 MindAura — AI-Powered Mental Wellness Journal
+# 🧠 MindAura — An Intelligent Multimodal AI System for Emotional State Analysis and Psychiatric Patient Monitoring
 
 MindAura is an AI-powered mental wellness platform that analyzes users' journal entries (both text and voice) to provide psychologically informed emotional insights. The system combines multilingual text preprocessing, vocal emotion detection, psychological feature engineering, and Large Language Model (LLM) reasoning to generate supportive, context-aware feedback.
 
