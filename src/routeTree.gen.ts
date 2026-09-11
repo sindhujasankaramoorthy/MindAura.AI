@@ -10,7 +10,9 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as CheckInRouteImport } from './routes/check-in'
 import { Route as CheckInsRouteImport } from './routes/check-ins'
+import { Route as PracticesRouteImport } from './routes/practices'
 import { Route as ProfileRouteImport } from './routes/profile'
 
 const IndexRoute = IndexRouteImport.update({
@@ -18,9 +20,19 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CheckInRoute = CheckInRouteImport.update({
+  id: '/check-in',
+  path: '/check-in',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CheckInsRoute = CheckInsRouteImport.update({
   id: '/check-ins',
   path: '/check-ins',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PracticesRoute = PracticesRouteImport.update({
+  id: '/practices',
+  path: '/practices',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProfileRoute = ProfileRouteImport.update({
@@ -31,31 +43,39 @@ const ProfileRoute = ProfileRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/check-in': typeof CheckInRoute
   '/check-ins': typeof CheckInsRoute
+  '/practices': typeof PracticesRoute
   '/profile': typeof ProfileRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/check-in': typeof CheckInRoute
   '/check-ins': typeof CheckInsRoute
+  '/practices': typeof PracticesRoute
   '/profile': typeof ProfileRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/check-in': typeof CheckInRoute
   '/check-ins': typeof CheckInsRoute
+  '/practices': typeof PracticesRoute
   '/profile': typeof ProfileRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/check-ins' | '/profile'
+  fullPaths: '/' | '/check-in' | '/check-ins' | '/practices' | '/profile'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/check-ins' | '/profile'
-  id: '__root__' | '/' | '/check-ins' | '/profile'
+  to: '/' | '/check-in' | '/check-ins' | '/practices' | '/profile'
+  id: '__root__' | '/' | '/check-in' | '/check-ins' | '/practices' | '/profile'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  CheckInRoute: typeof CheckInRoute
   CheckInsRoute: typeof CheckInsRoute
+  PracticesRoute: typeof PracticesRoute
   ProfileRoute: typeof ProfileRoute
 }
 
@@ -68,11 +88,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/check-in': {
+      id: '/check-in'
+      path: '/check-in'
+      fullPath: '/check-in'
+      preLoaderRoute: typeof CheckInRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/check-ins': {
       id: '/check-ins'
       path: '/check-ins'
       fullPath: '/check-ins'
       preLoaderRoute: typeof CheckInsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/practices': {
+      id: '/practices'
+      path: '/practices'
+      fullPath: '/practices'
+      preLoaderRoute: typeof PracticesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/profile': {
@@ -87,7 +121,9 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  CheckInRoute: CheckInRoute,
   CheckInsRoute: CheckInsRoute,
+  PracticesRoute: PracticesRoute,
   ProfileRoute: ProfileRoute,
 }
 export const routeTree = rootRouteImport
