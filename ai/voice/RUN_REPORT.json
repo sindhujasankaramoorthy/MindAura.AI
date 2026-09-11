@@ -1,0 +1,113 @@
+{
+  "started": "2026-09-10T16:35:27",
+  "backbone": "facebook/wav2vec2-xls-r-300m",
+  "events": [
+    "2026-09-10T16:35:27 | ==== supervisor start ====",
+    "2026-09-10T16:35:27 | run: python -m ai.voice.prepare --corpus ravdess crema_d urdu",
+    "2026-09-10T16:35:39 | [v0] train attempt 1: batch=4 grad_accum=8 max_seconds=6",
+    "2026-09-10T16:35:39 | run: python -m ai.voice.train --epochs 4 --batch 4 --grad-accum 8 --max-seconds 6",
+    "2026-09-10T16:46:20 | [v0] training succeeded on attempt 1",
+    "2026-09-10T16:46:20 | run: python -m ai.voice.evaluate",
+    "2026-09-10T16:46:32 | waiting for background dataset downloads to finish ...",
+    "2026-09-10T16:46:32 | no download process running",
+    "2026-09-10T16:46:32 | run: python -m ai.voice.download --corpus subesco kannada resd",
+    "2026-09-10T17:53:40 | run: python -m ai.voice.prepare --corpus all",
+    "2026-09-10T17:54:02 | [full] train attempt 1: batch=4 grad_accum=8 max_seconds=6",
+    "2026-09-10T17:54:02 | run: python -m ai.voice.train --epochs 4 --batch 4 --grad-accum 8 --max-seconds 6",
+    "2026-09-10T18:11:54 | [full] training succeeded on attempt 1",
+    "2026-09-10T18:11:54 | run: python -m ai.voice.evaluate",
+    "2026-09-10T18:12:08 | ==== supervisor finished ===="
+  ],
+  "errors_and_fixes": [],
+  "stages": {
+    "v0": {
+      "prepare": {
+        "clips": 10338,
+        "by_split": {
+          "test": 809,
+          "train": 8563,
+          "val": 966
+        },
+        "by_language": {
+          "en": 9938,
+          "ur": 400
+        },
+        "by_emotion": {
+          "neutral": 1379,
+          "happy": 1755,
+          "sad": 1755,
+          "angry": 1755,
+          "fear": 1655,
+          "disgust": 1655,
+          "surprise": 384
+        },
+        "by_corpus": {
+          "ravdess": 2496,
+          "crema_d": 7442,
+          "urdu": 400
+        }
+      },
+      "trained": true,
+      "attempt": 1,
+      "batch": 4,
+      "grad_accum": 8,
+      "max_seconds": 6,
+      "eval": {
+        "accuracy": 0.6044499381953028,
+        "macro_f1": 0.5764458692480454,
+        "per_language_macro_f1": {
+          "en": 0.5692900284453237,
+          "ur": 0.3482280431432974
+        }
+      }
+    },
+    "full": {
+      "prepare": {
+        "clips": 14806,
+        "by_split": {
+          "test": 881,
+          "train": 12123,
+          "val": 1802
+        },
+        "by_language": {
+          "en": 9938,
+          "ur": 400,
+          "bn": 4000,
+          "kn": 468
+        },
+        "by_emotion": {
+          "neutral": 2457,
+          "happy": 1833,
+          "sad": 1833,
+          "angry": 1833,
+          "fear": 2733,
+          "disgust": 2655,
+          "surprise": 1462
+        },
+        "by_corpus": {
+          "ravdess": 2496,
+          "crema_d": 7442,
+          "urdu": 400,
+          "subesco": 4000,
+          "kannada": 468
+        }
+      },
+      "trained": true,
+      "attempt": 1,
+      "batch": 4,
+      "grad_accum": 8,
+      "max_seconds": 6,
+      "eval": {
+        "accuracy": 0.6503972758229285,
+        "macro_f1": 0.6322543094308113,
+        "per_language_macro_f1": {
+          "en": 0.6512834022637971,
+          "kn": 0.29390153190462787,
+          "ur": 0.37453721783956884
+        }
+      }
+    }
+  },
+  "updated": "2026-09-10T18:12:08",
+  "finished": "2026-09-10T18:12:08"
+}
