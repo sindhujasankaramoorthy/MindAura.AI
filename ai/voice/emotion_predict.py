@@ -12,6 +12,14 @@ try:
 except ImportError:
     from voice_features import extract_voice_features
 
+try:
+    from ai.model_registry import get_wav2vec2_ser
+except ImportError:
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if project_root not in sys.path:
+        sys.path.append(project_root)
+    from ai.model_registry import get_wav2vec2_ser
+
 logger = logging.getLogger(__name__)
 
 # ------------------------------------
@@ -60,10 +68,7 @@ class SERAnalyzer:
         global _processor, _model
         if _model is None or _processor is None:
             logger.info("Loading Speech Emotion Recognition Model...")
-            from transformers import AutoFeatureExtractor, AutoModelForAudioClassification
-            _processor = AutoFeatureExtractor.from_pretrained(MODEL_NAME)
-            _model = AutoModelForAudioClassification.from_pretrained(MODEL_NAME)
-            _model.eval()
+            _processor, _model = get_wav2vec2_ser()
 
     def _predict_chunk(self, audio_chunk: np.ndarray, sr: int = 16000) -> Dict[str, float]:
         if len(audio_chunk) == 0:

@@ -11,8 +11,6 @@ OUTPUT_CSV = os.path.join(
     "metadata.csv"
 )
 
-os.makedirs(os.path.dirname(OUTPUT_CSV), exist_ok=True)
-
 ravdess_map = {
     "01": "neutral",
     "02": "calm",
@@ -33,74 +31,82 @@ crema_map = {
     "SAD": "sad"
 }
 
-rows = []
 
-# --------------------------
-# RAVDESS
-# --------------------------
+def main():
+    os.makedirs(os.path.dirname(OUTPUT_CSV), exist_ok=True)
 
-ravdess_dir = os.path.join(DATASET_DIR, "ravdess")
+    rows = []
 
-for root, _, files in os.walk(ravdess_dir):
+    # --------------------------
+    # RAVDESS
+    # --------------------------
 
-    for file in files:
+    ravdess_dir = os.path.join(DATASET_DIR, "ravdess")
 
-        if file.endswith(".wav"):
+    for root, _, files in os.walk(ravdess_dir):
 
-            parts = file.split("-")
+        for file in files:
 
-            emotion = ravdess_map.get(parts[2])
+            if file.endswith(".wav"):
 
-            rows.append([
-                os.path.join(root, file),
-                emotion,
-                "ravdess"
-            ])
+                parts = file.split("-")
 
-# --------------------------
-# CREMA-D
-# --------------------------
+                emotion = ravdess_map.get(parts[2])
 
-crema_dir = os.path.join(DATASET_DIR, "crema_d")
+                rows.append([
+                    os.path.join(root, file),
+                    emotion,
+                    "ravdess"
+                ])
 
-for root, _, files in os.walk(crema_dir):
+    # --------------------------
+    # CREMA-D
+    # --------------------------
 
-    for file in files:
+    crema_dir = os.path.join(DATASET_DIR, "crema_d")
 
-        if file.endswith(".wav"):
+    for root, _, files in os.walk(crema_dir):
 
-            parts = file.split("_")
+        for file in files:
 
-            emotion = crema_map.get(parts[2])
+            if file.endswith(".wav"):
 
-            rows.append([
-                os.path.join(root, file),
-                emotion,
-                "crema_d"
-            ])
+                parts = file.split("_")
 
-# --------------------------
-# Save CSV
-# --------------------------
+                emotion = crema_map.get(parts[2])
 
-with open(
-    OUTPUT_CSV,
-    "w",
-    newline="",
-    encoding="utf-8"
-) as f:
+                rows.append([
+                    os.path.join(root, file),
+                    emotion,
+                    "crema_d"
+                ])
 
-    writer = csv.writer(f)
+    # --------------------------
+    # Save CSV
+    # --------------------------
 
-    writer.writerow([
-        "audio_path",
-        "emotion",
-        "dataset"
-    ])
+    with open(
+        OUTPUT_CSV,
+        "w",
+        newline="",
+        encoding="utf-8"
+    ) as f:
 
-    writer.writerows(rows)
+        writer = csv.writer(f)
 
-print("=" * 50)
-print("Metadata created successfully")
-print("Samples :", len(rows))
-print("Saved to :", OUTPUT_CSV)
+        writer.writerow([
+            "audio_path",
+            "emotion",
+            "dataset"
+        ])
+
+        writer.writerows(rows)
+
+    print("=" * 50)
+    print("Metadata created successfully")
+    print("Samples :", len(rows))
+    print("Saved to :", OUTPUT_CSV)
+
+
+if __name__ == "__main__":
+    main()

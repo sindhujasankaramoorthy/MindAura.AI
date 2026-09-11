@@ -17,8 +17,6 @@ OUTPUT_DIR = os.path.join(
     "processed_audio"
 )
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
 
 def preprocess_audio(input_path, output_path):
     """
@@ -46,65 +44,71 @@ def preprocess_audio(input_path, output_path):
     )
 
 
-processed = 0
-failed = 0
+def main():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-with open(METADATA_CSV, newline="", encoding="utf-8") as f:
+    processed = 0
+    failed = 0
 
-    reader = csv.DictReader(f)
+    with open(METADATA_CSV, newline="", encoding="utf-8") as f:
 
-    # ---------- DEBUG MODE ----------
-    # Change/remove this later after debugging.
-    for i, row in enumerate(reader):
+        reader = csv.DictReader(f)
 
-        input_audio = row["audio_path"]
-        emotion = row["emotion"]
-        dataset = row["dataset"]
+        # ---------- DEBUG MODE ----------
+        # Change/remove this later after debugging.
+        for i, row in enumerate(reader):
 
-        emotion_folder = os.path.join(
-            OUTPUT_DIR,
-            emotion
-        )
+            input_audio = row["audio_path"]
+            emotion = row["emotion"]
+            dataset = row["dataset"]
 
-        os.makedirs(
-            emotion_folder,
-            exist_ok=True
-        )
-
-        filename = dataset + "_" + os.path.basename(input_audio)
-
-        output_audio = os.path.join(
-            emotion_folder,
-            filename
-        )
-
-        try:
-
-            preprocess_audio(
-                input_audio,
-                output_audio
+            emotion_folder = os.path.join(
+                OUTPUT_DIR,
+                emotion
             )
 
-            processed += 1
+            os.makedirs(
+                emotion_folder,
+                exist_ok=True
+            )
 
-            print(f"Processed: {filename}")
+            filename = dataset + "_" + os.path.basename(input_audio)
 
-        except Exception as e:
+            output_audio = os.path.join(
+                emotion_folder,
+                filename
+            )
 
-            failed += 1
+            try:
 
-            print("\n" + "=" * 70)
-            print("FAILED FILE:")
-            print(input_audio)
-            print("\nERROR:")
-            print(repr(e))
-            print("=" * 70)
+                preprocess_audio(
+                    input_audio,
+                    output_audio
+                )
+
+                processed += 1
+
+                print(f"Processed: {filename}")
+
+            except Exception as e:
+
+                failed += 1
+
+                print("\n" + "=" * 70)
+                print("FAILED FILE:")
+                print(input_audio)
+                print("\nERROR:")
+                print(repr(e))
+                print("=" * 70)
+
+    print("\n" + "=" * 60)
+    print("PREPROCESSING COMPLETE")
+    print("=" * 60)
+
+    print(f"Processed : {processed}")
+    print(f"Failed    : {failed}")
+    print(f"Saved To  : {OUTPUT_DIR}")
 
 
-print("\n" + "=" * 60)
-print("PREPROCESSING COMPLETE")
-print("=" * 60)
-
-print(f"Processed : {processed}")
-print(f"Failed    : {failed}")
-print(f"Saved To  : {OUTPUT_DIR}")
+if __name__ == "__main__":
+    main()

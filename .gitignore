@@ -91,6 +91,8 @@ logs/
 # ========================
 *.sqlite3
 *.db
+mindaura.db-wal
+mindaura.db-shm
 
 # ========================
 # Docker
@@ -119,6 +121,10 @@ venv/
 
 # Datasets
 ai/training/datasets/
+ai/training/processed_audio/
+ai/voice/raw/
+ai/voice/processed/
+ai/voice/manifest.csv
 
 # Trained models
 models/

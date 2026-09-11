@@ -12,7 +12,8 @@ import csv
 import os
 import logging
 from wordfreq import zipf_frequency as z
-from rapidfuzz import process, fuzz
+
+from .lexical_constants import ZIPF_ENGLISH_THRESHOLD_LOOSE, fuzzy_match_tanglish
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ class WordClassifier:
         }
 
     def is_eng(self,word):
-        return z(word.lower(),"en")>2.5
+        return z(word.lower(),"en") > ZIPF_ENGLISH_THRESHOLD_LOOSE
 
     def classify(self,word):
         w_lower = word.lower()
@@ -71,8 +72,7 @@ class WordClassifier:
         
         # If it falls through to UNKNOWN, perform a fuzzy check against Tanglish vocabulary
         if self.tanglish_words:
-            match = process.extractOne(w_lower, self.tanglish_words, scorer=fuzz.ratio)
-            if match and match[1] >= 85.0:
+            if fuzzy_match_tanglish(w_lower, self.tanglish_words) is not None:
                 return "TANGLISH"
 
         return "UNKNOWN"
