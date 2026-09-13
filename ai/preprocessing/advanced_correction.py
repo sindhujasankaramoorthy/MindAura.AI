@@ -1,0 +1,659 @@
+"""
+Phase 3 — Advanced Emotion-Preserving Text Correction
+
+Multi-stage preprocessing layer that sits between Tanglish normalization
+and RoBERTa GoEmotions inference.
+
+Pipeline order:
+    1. Language Detection
+    2. NER Protection
+    3. Context-Aware Auto Correction
+    4. Tanglish Semantic Normalization
+    5. Negation Recovery
+    6. Sentence Reconstruction
+"""
+import re
+import importlib.resources
+import logging
+import itertools
+from symspellpy import SymSpell, Verbosity
+from typing import Set, Dict, List, Tuple, Optional
+import torch
+
+from ai.model_registry import ModelRegistry, get_gpt2_perplexity_model, get_indictrans2
+from .tanglish_patterns import (
+    normalize_tanglish_semantics, 
+    WORD_REPLACEMENTS
+)
+from .language_detector import LanguageDetector, TokenLanguage
+
+logger = logging.getLogger(__name__)
+
+# ──────────────────────────────────────────────────────────────────────
+# A. NEGATION RECOVERY MAP — Configurable & Extensible
+# ──────────────────────────────────────────────────────────────────────
+NEGATION_RECOVERY_MAP: Dict[str, str] = {
+    "cnt": "can't",
+    "cant": "can't",
+    "dont": "don't",
+    "didnt": "didn't",
+    "doesnt": "doesn't",
+    "isnt": "isn't",
+    "arent": "aren't",
+    "wasnt": "wasn't",
+    "werent": "weren't",
+    "wont": "won't",
+    "wouldnt": "wouldn't",
+    "couldnt": "couldn't",
+    "shouldnt": "shouldn't",
+    "havent": "haven't",
+    "hasnt": "hasn't",
+    "hadnt": "hadn't",
+    "aint": "ain't",
+    "mustnt": "mustn't",
+    "neednt": "needn't",
+    "mightnt": "mightn't",
+    "idnt": "I don't",
+    "dnt": "don't",
+    "dhnt": "don't",
+    "cnat": "can't",
+    "cannt": "can't",
+    "donot": "do not",
+    "cannot": "cannot",
+    "wnt": "won't",
+    "shldnt": "shouldn't",
+    "cldnt": "couldn't",
+    "wldnt": "wouldn't",
+    "dsnt": "doesn't",
+    "nvr": "never",
+}
+
+_NEGATION_PAIRS: List[Tuple[re.Pattern, str]] = [
+    (re.compile(r'\b' + re.escape(k) + r'\b', re.IGNORECASE), v)
+    for k, v in sorted(NEGATION_RECOVERY_MAP.items(), key=lambda x: len(x[0]), reverse=True)
+]
+
+# ──────────────────────────────────────────────────────────────────────
+# C. EMOTIONAL VOCABULARY PROTECTION
+# ──────────────────────────────────────────────────────────────────────
+PROTECTED_EMOTIONS: Set[str] = {
+    "sad", "sadness", "lonely", "alone", "blank", "empty",
+    "fear", "afraid", "scared", "anxious", "panic", "stress", "stressed",
+    "overthink", "overthinking", "hurt", "broken", "cry", "crying",
+    "angry", "frustrated", "disturbed", "upset", "hopeless", "helpless",
+    "worthless", "tired", "exhausted", "burnout", "burnt", "burned",
+    "numb", "restless", "confused", "lost", "depressed", "worried",
+    "grief", "grieving", "shame", "guilty", "guilt", "regret",
+    "miserable", "suffering", "pain", "painful", "trauma", "traumatic",
+    "insecure", "insecurity", "nervous", "dread", "agony", "anguish",
+    "bitter", "resentful", "resentment", "jealous", "jealousy", "envy",
+    "desperate", "despair", "gloomy", "melancholy", "sorrow", "sorrowful",
+    "vulnerable", "weak", "fatigue", "fatigued", "overwhelmed", "overwhelm",
+}
+
+PROTECTED_NEGATIONS: Set[str] = {
+    "not", "don't", "doesn't", "can't", "cannot", "won't", "isn't",
+    "aren't", "wasn't", "weren't", "haven't", "hasn't", "hadn't",
+    "didn't", "couldn't", "shouldn't", "wouldn't", "ain't", "never",
+    "no", "none", "nor", "neither", "nobody", "nothing", "nowhere",
+    "mustn't", "needn't", "mightn't",
+}
+
+# Protected words — SymSpell must never touch these
+PROTECTED_WORDS: Set[str] = PROTECTED_NEGATIONS | PROTECTED_EMOTIONS | {'person', 'gpe', 'org', 'relation'} | set(NEGATION_RECOVERY_MAP.keys())
+
+# Slang adjustments (minimal fallback rules)
+CONTEXT_REPLACEMENTS: List[Tuple[re.Pattern, str]] = [
+    (re.compile(r"\bwanna\b", re.IGNORECASE), "want to"),
+    (re.compile(r"\bgonna\b", re.IGNORECASE), "going to"),
+    (re.compile(r"\bgotta\b", re.IGNORECASE), "got to"),
+    (re.compile(r"\bkinda\b", re.IGNORECASE), "kind of"),
+    (re.compile(r"\bsorta\b", re.IGNORECASE), "sort of"),
+    (re.compile(r"\blemme\b", re.IGNORECASE), "let me"),
+    (re.compile(r"\bgimme\b", re.IGNORECASE), "give me"),
+    (re.compile(r"\bdunno\b", re.IGNORECASE), "don't know"),
+]
+
+PSYCHOLOGICAL_STANDARDIZATION: List[Tuple[re.Pattern, str]] = [
+    (re.compile(r"\bmind\s+disturbed\b", re.IGNORECASE), "mentally disturbed"),
+    (re.compile(r"\bmentally\s+exhausted\b", re.IGNORECASE), "mental fatigue"),
+]
+
+
+CUSTOM_OVERRIDES: Dict[str, str] = {
+    "thnkng": "thinking",
+    "thnking": "thinking",
+    "thinkng": "thinking",
+    "thnk": "think",
+    "feling": "feeling",
+    "feelin": "feeling",
+    "feelng": "feeling",
+    "undrstnd": "understand",
+    "undrstd": "understood",
+    "smthing": "something",
+    "nthing": "nothing",
+    "evrthing": "everything",
+    "wrkng": "working",
+    "hlping": "helping",
+    "tlking": "talking",
+    "sleping": "sleeping",
+    "brking": "breaking",
+    # Common emotional misspellings (short words misclassified by Tanglish heuristic)
+    "minf": "mind",
+    "mnd": "mind",
+    "lonley": "lonely",
+    "lonly": "lonely",
+    "scard": "scared",
+    "scrd": "scared",
+    "anxios": "anxious",
+    "anxous": "anxious",
+    "ovrthinking": "overthinking",
+    "overthinkng": "overthinking",
+    "ovrthnking": "overthinking",
+    "depresed": "depressed",
+    "depressd": "depressed",
+    "wurried": "worried",
+    "wrried": "worried",
+    "painfull": "painful",
+    "emty": "empty",
+    "emtpy": "empty",
+}
+
+
+class EmotionPreservingCorrector:
+    """
+    Advanced text correction layer preserving psychological and emotional context.
+    """
+    EDIT_DISTANCE_RATIO_THRESHOLD = 0.6
+
+    @staticmethod
+    def _build_symspell() -> SymSpell:
+        sym_spell = SymSpell(max_dictionary_edit_distance=2, prefix_length=7)
+
+        # Load the default English frequency dictionary
+        try:
+            ref = importlib.resources.files("symspellpy") / "frequency_dictionary_en_82_765.txt"
+            with importlib.resources.as_file(ref) as path:
+                sym_spell.load_dictionary(str(path), term_index=0, count_index=1)
+        except AttributeError:
+            import pkg_resources
+            dictionary_path = pkg_resources.resource_filename(
+                "symspellpy", "frequency_dictionary_en_82_765.txt"
+            )
+            sym_spell.load_dictionary(dictionary_path, term_index=0, count_index=1)
+
+        # Boost protected words to max frequency
+        for word in PROTECTED_WORDS:
+            sym_spell.create_dictionary_entry(word, 999_999_999)
+
+        # Boost negation recovery map keys so they are recognized as exact matches
+        # and won't be corrected by SymSpell (they will be expanded by recover_negations)
+        for key in NEGATION_RECOVERY_MAP:
+            sym_spell.create_dictionary_entry(key, 999_999_999)
+
+        # Boost common emotion/mental-health words that may be absent from standard dict
+        _extra_emotional = [
+            "overthinking", "overthink", "burnout", "helpless", "hopeless",
+            "worthless", "numb", "restless", "depressed", "anxious",
+            "fatigued", "overwhelmed", "insecure", "traumatic", "thinking",
+            "lonely", "scared", "worried", "afraid", "miserable",
+            "melancholy", "anguish", "mindfulness", "mind", "mental",
+            "overthink", "overwhelm", "panic", "grief", "sorrow",
+        ]
+        for w in _extra_emotional:
+            sym_spell.create_dictionary_entry(w, 500_000_000)
+
+        # Register canonical Tanglish roots in SymSpell so they are
+        # "known" and never substituted as English typo corrections.
+        # The LanguageDetector will still correctly route them as Tanglish.
+        for root in WORD_REPLACEMENTS:
+            sym_spell.create_dictionary_entry(root, 1)  # low freq = known but not English
+
+        return sym_spell
+
+    def __init__(self):
+        # SymSpell is local-file-backed (no network download) and needed by
+        # nearly every classify() call via LanguageDetector, so it stays
+        # eager — but routed through ModelRegistry so repeated
+        # EmotionPreservingCorrector() instantiations reuse one build.
+        self.sym_spell = ModelRegistry.get("symspell", self._build_symspell)
+
+        # Pre-SymSpell overrides
+        self._custom_overrides = CUSTOM_OVERRIDES
+
+        # Context Model (GPT2, perplexity scorer) — lazy: only loaded the
+        # first time a misspelling actually needs combinatorial scoring.
+        self._mlm_tokenizer = None
+        self._mlm_model = None
+        self._mlm_load_attempted = False
+
+        # IndicTrans2 — lazy: only loaded the first time translate_indic()
+        # is actually invoked (currently unwired; see implementation_plan.md).
+        self._indic_tokenizer = None
+        self._indic_model = None
+        self._indic_processor = None
+        self._indic_load_attempted = False
+
+        # NER Protection Layer
+        try:
+            from ai.preprocessing.ner_protection import NERProtection
+            self.ner_protection = NERProtection()
+        except Exception as e:
+            logger.error(f"Failed to initialize NER Protection: {e}")
+            self.ner_protection = None
+
+        # Language Detector
+        self.language_detector = LanguageDetector(
+            self.sym_spell,
+            PROTECTED_WORDS,
+            set(NEGATION_RECOVERY_MAP.keys())
+        )
+
+    def _ensure_mlm_loaded(self) -> None:
+        if not self._mlm_load_attempted:
+            self._mlm_load_attempted = True
+            try:
+                self._mlm_tokenizer, self._mlm_model = get_gpt2_perplexity_model()
+            except Exception as e:
+                logger.error(f"Failed to load MLM for context evaluation: {e}")
+
+    @property
+    def _has_context_model(self) -> bool:
+        self._ensure_mlm_loaded()
+        return self._mlm_model is not None
+
+    @property
+    def tokenizer(self):
+        self._ensure_mlm_loaded()
+        return self._mlm_tokenizer
+
+    @property
+    def mlm_model(self):
+        self._ensure_mlm_loaded()
+        return self._mlm_model
+
+    def _ensure_indic_loaded(self) -> None:
+        if not self._indic_load_attempted:
+            self._indic_load_attempted = True
+            try:
+                self._indic_tokenizer, self._indic_model, self._indic_processor = get_indictrans2()
+            except Exception as e:
+                logger.error(f"Failed to load IndicTrans2 model: {e}")
+
+    @property
+    def _has_indic_model(self) -> bool:
+        self._ensure_indic_loaded()
+        return self._indic_model is not None
+
+    @property
+    def indic_tokenizer(self):
+        self._ensure_indic_loaded()
+        return self._indic_tokenizer
+
+    @property
+    def indic_model(self):
+        self._ensure_indic_loaded()
+        return self._indic_model
+
+    @property
+    def indic_processor(self):
+        self._ensure_indic_loaded()
+        return self._indic_processor
+
+    def _score_sentence(self, sentence: str) -> float:
+        if not self._has_context_model:
+            return float('inf')
+        
+        inputs = self.tokenizer(sentence, return_tensors='pt')
+        with torch.no_grad():
+            outputs = self.mlm_model(inputs['input_ids'], labels=inputs['input_ids'])
+            return outputs.loss.item() * inputs['input_ids'].size(1)
+
+    def translate_indic(self, text: str, src_lang: str) -> str:
+        if not self._has_indic_model:
+            return text
+        
+        lang_map = {
+            'ta': 'tam_Taml', 'hi': 'hin_Deva', 'te': 'tel_Telu', 
+            'ml': 'mal_Mlym', 'kn': 'kan_Knda', 'bn': 'ben_Beng', 
+            'mr': 'mar_Deva', 'gu': 'guj_Gujr', 'pa': 'pan_Guru', 
+            'ur': 'urd_Arab'
+        }
+        reverse_map = {
+            'TAMIL': 'tam_Taml', 'HINDI': 'hin_Deva', 'TELUGU': 'tel_Telu',
+            'MALAYALAM': 'mal_Mlym', 'KANNADA': 'kan_Knda', 'BENGALI': 'ben_Beng',
+            'MARATHI': 'mar_Deva', 'GUJARATI': 'guj_Gujr', 'PUNJABI': 'pan_Guru',
+            'URDU': 'urd_Arab'
+        }
+        mapped_src = lang_map.get(src_lang) or reverse_map.get(src_lang, 'hin_Deva')
+
+        tgt_lang = "eng_Latn"
+        try:
+            batch = self.indic_processor.preprocess_batch([text], src_lang=mapped_src, tgt_lang=tgt_lang)
+            inputs = self.indic_tokenizer(batch, padding="longest", truncation=True, max_length=512, return_tensors="pt")
+            with torch.no_grad():
+                outputs = self.indic_model.generate(**inputs, max_new_tokens=512)
+            decoded = self.indic_tokenizer.batch_decode(outputs, skip_special_tokens=True)
+            return self.indic_processor.postprocess_batch(decoded, lang=tgt_lang)[0]
+        except Exception as e:
+            logger.error(f"Indic translation error: {e}")
+            return text
+
+    def recover_negations(self, text: str) -> str:
+        processed = text
+        for pattern, replacement in _NEGATION_PAIRS:
+            processed = pattern.sub(replacement, processed)
+        return processed
+
+    def correct_english_token(self, token: str) -> List[str]:
+        """
+        Uses SymSpell for English auto-correction.
+        If the word is known, slang, or closely matched, returns candidate pool.
+        """
+        from .language_boundary import INTERNET_SLANG
+        
+        word = token
+        word_lower = word.lower()
+
+        if word_lower in INTERNET_SLANG or (len(word) <= 1 or 
+            word_lower in ("i", "a", "im", "ok", "no") or 
+            "'" in word or 
+            word_lower in PROTECTED_WORDS):
+            return [word]
+
+        if word_lower in self._custom_overrides:
+            corrected = self._custom_overrides[word_lower]
+            if word.istitle(): corrected = corrected.title()
+            elif word.isupper(): corrected = corrected.upper()
+            return [corrected]
+
+        # Check if word is already correct
+        suggestions = self.sym_spell.lookup(
+            word_lower, Verbosity.TOP, max_edit_distance=2, include_unknown=True
+        )
+        if not suggestions or suggestions[0].term == word_lower:
+            return [word]
+
+        # Get correction candidates
+        best_suggestions = self.sym_spell.lookup(
+            word_lower, Verbosity.CLOSEST, max_edit_distance=2, include_unknown=False
+        )
+        
+        valid_candidates = []
+        for s in best_suggestions[:3]:
+            ratio = s.distance / max(len(word_lower), 1)
+            if ratio <= self.EDIT_DISTANCE_RATIO_THRESHOLD:
+                cand = s.term
+                if word.istitle(): cand = cand.title()
+                elif word.isupper(): cand = cand.upper()
+                valid_candidates.append(cand)
+
+        if valid_candidates:
+            if word not in valid_candidates:
+                valid_candidates.append(word)
+            return valid_candidates
+        
+        return [word]
+
+    def correct_tanglish_token(self, token: str, candidate_pool: Set[str] = None) -> str:
+        """
+        Applies generalized Tanglish spelling correction using phonetic key distance.
+        """
+        word = token
+        word_lower = word.lower()
+
+        # Prevent autocorrect from destroying specific tokens before phrase normalization
+        if word_lower in {"pidikula", "pidikala", "pudikula", "pudikala"}:
+            return word_lower
+
+        # Use the official Tanglish model for spelling correction
+        try:
+            from ai.tanglish_model.src.autocorrect import correct_word
+            tanglish_result = correct_word(word)
+            corrected = tanglish_result.get("corrected", word)
+            logger.debug(f"[Tanglish Correction Path] Corrected '{word}' -> '{corrected}'")
+            return corrected
+        except Exception as e:
+            logger.warning(f"Tanglish autocorrect failed: {e}")
+            return word
+
+    def correct(self, text: str, pipeline: str = "UNKNOWN") -> tuple:
+        """
+        Applies Context-Aware Auto Correction with separate English and Tanglish paths.
+        Negation recovery runs first to protect negation contractions from SymSpell corruption.
+        Returns: (final_sentence, stages_dict, transliteration_map)
+        """
+        # Step 0: Recover negations FIRST (before spell correction corrupts them)
+        text = self.recover_negations(text)
+
+        classifications = self.language_detector.detect(text, [], pipeline=pipeline)
+        candidate_options = []
+        has_misspelling = False
+
+        for token, lang in classifications:
+            if not token:
+                candidate_options.append([token])
+                continue
+
+            word = token
+            word_lower = word.lower()
+
+            # 1. Unknown tokens or Delimiters/Placeholders (preserved as-is)
+            if lang == TokenLanguage.UNKNOWN:
+                candidate_options.append([word])
+                continue
+
+            # 1b. Custom overrides applied universally (before language-path branching)
+            if word_lower in self._custom_overrides:
+                corrected = self._custom_overrides[word_lower]
+                if word.istitle(): corrected = corrected.title()
+                elif word.isupper(): corrected = corrected.upper()
+                candidate_options.append([corrected])
+                continue
+
+            # 2. English Correction Path
+            if lang == TokenLanguage.ENGLISH:
+                cands = self.correct_english_token(word)
+                if len(cands) > 1 or cands[0] != word:
+                    has_misspelling = True
+                candidate_options.append(cands)
+
+            # 3. Tanglish Correction Path
+            elif lang == TokenLanguage.TANGLISH:
+                corrected = self.correct_tanglish_token(word)
+                logger.debug(f"After autocorrect: '{corrected}'")
+                
+                # Instead of translating word-by-word, we append it as a TANGLISH_CHUNK sentinel.
+                # This allows phrase normalization across multiple tokens.
+                candidate_options.append([(corrected, 'TANGLISH_CHUNK', True)])
+
+            # 4. Indian Language — defer translation: store a sentinel tuple so
+            # consecutive Indic tokens can be grouped and translated together
+            # as a single string (preserving sentence context for IndicTrans2).
+            elif lang in ['TAMIL', 'HINDI', 'TELUGU', 'MALAYALAM', 'KANNADA',
+                          'BENGALI', 'MARATHI', 'GUJARATI', 'PUNJABI', 'URDU']:
+                candidate_options.append([(word, lang, True)])
+
+        # ── Indic Chunk Translation ─────────────────────────────────────────
+        merged_options_autocorrect = []
+        merged_options_phrase = []
+        merged_options_canonical = []
+        merged_options_indic = []
+        merged_options_translated = []
+        transliteration_map = {}
+        
+        i = 0
+        while i < len(candidate_options):
+            slot = candidate_options[i]
+
+            if (slot and isinstance(slot[0], tuple) and
+                    len(slot[0]) == 3 and slot[0][2] is True):
+                chunk_lang = slot[0][1]
+                chunk_parts: list = [slot[0][0]]
+                j = i + 1
+
+                while j < len(candidate_options):
+                    next_slot = candidate_options[j]
+                    if (next_slot and isinstance(next_slot[0], tuple) and
+                            len(next_slot[0]) == 3 and next_slot[0][2] is True and
+                            next_slot[0][1] == chunk_lang):
+                        chunk_parts.append(next_slot[0][0])
+                        j += 1
+                        continue
+
+                    if (next_slot and len(next_slot) == 1 and
+                            isinstance(next_slot[0], str)):
+                        if next_slot[0].startswith("<") and next_slot[0].endswith(">") and "_" in next_slot[0]:
+                            break
+                        if j + 1 < len(candidate_options):
+                            peek = candidate_options[j + 1]
+                            if (peek and isinstance(peek[0], tuple) and
+                                    len(peek[0]) == 3 and peek[0][2] is True and
+                                    peek[0][1] == chunk_lang):
+                                chunk_parts.append(next_slot[0])
+                                j += 1
+                                continue
+                    break
+
+                full_chunk = "".join(chunk_parts)
+                
+                if chunk_lang == 'TANGLISH_CHUNK':
+                    # 1. Autocorrect chunk
+                    chunk_autocorrect = full_chunk
+                    
+                    # 2. Phrase normalization
+                    try:
+                        from ai.preprocessing.emotion_phrase_normalizer import normalize_emotion_phrases
+                        chunk_phrase = normalize_emotion_phrases(full_chunk)
+                    except Exception as e:
+                        logger.error(f"Phrase normalization failed: {e}")
+                        chunk_phrase = full_chunk
+                    
+                    # 3. Canonical Normalization
+                    try:
+                        from ai.preprocessing.tanglish_canonical import normalize_canonical_tanglish_sentence
+                        chunk_canonical = normalize_canonical_tanglish_sentence(chunk_phrase)
+                    except Exception as e:
+                        logger.error(f"Canonical normalization failed: {e}")
+                        chunk_canonical = chunk_phrase
+                        
+                    # 4. IndicXlit
+                    try:
+                        from ai.transliteration.tanglish_to_tamil import TanglishToTamil
+                        chunk_indic = TanglishToTamil.get_instance().transliterate_sentence(chunk_canonical)
+                    except Exception as e:
+                        logger.error(f"Failed to transliterate: {e}")
+                        chunk_indic = chunk_canonical
+                        
+                    # Build token alignment map
+                    can_words = re.findall(r'\S+', chunk_canonical)
+                    ind_words = re.findall(r'\S+', chunk_indic)
+                    if len(can_words) == len(ind_words):
+                        for c, w in zip(can_words, ind_words):
+                            transliteration_map[c] = w
+                            
+                    # 5. Skip translation here (moved to final step in text_normalizer)
+                    
+                    merged_options_autocorrect.append([chunk_autocorrect])
+                    merged_options_phrase.append([chunk_phrase])
+                    merged_options_canonical.append([chunk_canonical])
+                    merged_options_indic.append([chunk_indic])
+                else:
+                    merged_options_autocorrect.append([full_chunk])
+                    merged_options_phrase.append([full_chunk])
+                    merged_options_canonical.append([full_chunk])
+                    merged_options_indic.append([full_chunk])
+                    
+                i = j
+            else:
+                merged_options_autocorrect.append(slot)
+                merged_options_phrase.append(slot)
+                merged_options_canonical.append(slot)
+                merged_options_indic.append(slot)
+                i += 1
+
+        def build_string(options_list, combo_indices):
+            parts = []
+            for idx, slot_opts in zip(combo_indices, options_list):
+                parts.append(slot_opts[idx if idx < len(slot_opts) else 0])
+            return "".join(parts)
+
+        best_combo = tuple(0 for _ in merged_options_indic)
+        
+        stages_dict = {
+            "autocorrect": build_string(merged_options_autocorrect, best_combo),
+            "phrase": build_string(merged_options_phrase, best_combo),
+            "canonical": build_string(merged_options_canonical, best_combo),
+            "indic": build_string(merged_options_indic, best_combo),
+        }
+        
+        corrected = stages_dict["indic"]
+        
+        if has_misspelling and self._has_context_model:
+            ranges = [range(len(opts)) for opts in merged_options_indic]
+            combinations = list(itertools.islice(itertools.product(*ranges), 100))
+            best_score = float('inf')
+
+            for combo in combinations:
+                candidate_sentence = build_string(merged_options_indic, combo)
+                score = self._score_sentence(candidate_sentence)
+                if score < best_score:
+                    best_score = score
+                    corrected = candidate_sentence
+                    best_combo = combo
+
+        stages = {
+            "autocorrect": build_string(merged_options_autocorrect, best_combo),
+            "phrase": build_string(merged_options_phrase, best_combo),
+            "canonical": build_string(merged_options_canonical, best_combo),
+            "indic": build_string(merged_options_indic, best_combo)
+        }
+
+        return corrected, stages, transliteration_map
+
+    def context_correct(self, text: str) -> str:
+        processed = text
+        for pattern, replacement in CONTEXT_REPLACEMENTS:
+            processed = pattern.sub(replacement, processed)
+        return processed
+
+    def standardize_phrases(self, text: str) -> str:
+        processed = text
+        for pattern, replacement in PSYCHOLOGICAL_STANDARDIZATION:
+            processed = pattern.sub(replacement, processed)
+        return processed
+
+    def reconstruct_sentence(self, text: str) -> str:
+        processed = text.strip()
+        processed = re.sub(r'\s+', ' ', processed)
+
+        _sentence_starters = [
+            r'I cannot', r'I can\'t', r'I don\'t', r'I feel', r'I am',
+            r'I have', r'I need', r'I want', r'I will', r'I won\'t',
+            r'My mind', r'My head',
+            r'need\b', r'want\b', r'everything\b',
+        ]
+        for starter in _sentence_starters:
+            pattern = re.compile(
+                r'(?<=[a-z])\s+(' + starter + r'\b)',
+                re.IGNORECASE
+            )
+            processed = pattern.sub(r'. \1', processed)
+
+        processed = re.sub(r'\s*,\s*', ', ', processed)
+        processed = re.sub(r'\s*\.\s*', '. ', processed)
+        processed = re.sub(r'\.{2,}', '.', processed)
+        processed = re.sub(r'(?<![a-zA-Z])i(?![a-zA-Z])', 'I', processed)
+
+        if processed:
+            processed = processed[0].upper() + processed[1:]
+
+        def _cap_after_punct(m: re.Match) -> str:
+            return m.group(1) + ' ' + m.group(2).upper()
+
+        processed = re.sub(r'([.!?])\s+([a-z])', _cap_after_punct, processed)
+        processed = processed.rstrip()
+        if processed and processed[-1] not in '.!?':
+            processed += '.'
+
+        return re.sub(r'\s+', ' ', processed).strip()

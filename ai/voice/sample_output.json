@@ -1,0 +1,24 @@
+{
+  "_note": "Real output from ai/voice/voice_analysis.py, run against ai/voice/raw/urdu/Happy/SM3_F2_H054.wav. Not hand-written. Whisper's base model labeled this clip 'hi' (Hindi) rather than 'ur' (Urdu) -- the two are acoustically close and a larger Whisper model (planned upgrade) should resolve this.",
+  "language_detected": "hi",
+  "raw_transcript": "यह तो सरी सुरते आपे यह सी रही है?",
+  "word_by_word_gloss": [
+    "this",
+    "So what ?",
+    "the",
+    "the stern",
+    "you",
+    "this",
+    "c.",
+    "remained",
+    "Is that right?"
+  ],
+  "contextual_translation": "This is the same as the other one.",
+  "acoustic_features": {
+    "pitch_mean_hz": 159.64,
+    "pitch_variability": 20.66,
+    "speaking_rate_wps": 3.0,
+    "pause_ratio": 0.2664,
+    "energy_rms": 0.0386
+  }
+}
