@@ -1,674 +1,244 @@
-# Mind Aura Wellbeing
+# 🧠 MindAura — An Intelligent Multimodal AI System for Emotional State Analysis and Psychiatric Patient Monitoring
+
+MindAura is an AI-powered mental wellness platform that analyzes users' journal entries (both text and voice) to provide psychologically informed emotional insights. The system combines multilingual text preprocessing, vocal emotion detection, psychological feature engineering, and Large Language Model (LLM) reasoning to generate supportive, context-aware feedback.
+
+---
+
+## Table of Contents
+- [Features](#-features)
+- [Architecture](#️-project-architecture)
+- [Project Structure](#-project-structure)
+- [Tech Stack](#️-tech-stack)
+- [AI Pipeline](#-ai-pipeline)
+- [Voice & Emotion Fusion Module](#-voice--emotion-fusion-module)
+- [Web Application Frontend](#-web-application-frontend)
+- [Installation](#️-installation)
+- [Running the App](#️-running)
+- [Current Progress](#-current-progress)
+- [Upcoming Features](#-upcoming-features)
+- [Contributors](#-contributors)
+
+---
+
+## 🚀 Features
+
+| Feature | Description |
+|---|---|
+| ✍️ Journal-based assessment | Analyzes free-form text journal entries for emotional wellness |
+| 🎤 Voice-based assessment | Smart microphone recording with Voice Activity Detection (VAD) |
+| 🌐 Tanglish → English normalization | Corrects and normalizes Tamil-English code-mixed text |
+| 🤖 Emotion detection (Text) | Multi-label emotion classification using RoBERTa (GoEmotions) |
+| 🗣️ Emotion detection (Voice) | Acoustic emotion prediction from speech tone using Wav2Vec2 |
+| ⚙️ Emotion Fusion Engine | Fuses text and vocal emotions to detect "Acoustic Dissonance" |
+| 📊 Psychological feature engineering | Converts raw emotion scores into interpretable psychological metrics |
+| 🧠 LLM-based interpretation | Generates supportive, context-aware feedback using Qwen |
+| 🌿 Patient Wellness Portal | Calm, human, and modern wellness check-in interface built with Lovable |
+| 🔒 Non-diagnostic design | Provides supportive insights, not clinical diagnoses |
+
+---
+
+## 🏗️ Project Architecture
+
+```text
+User Input (Text or Voice)
+       │
+       ├─────────────────────────────────┐
+       ▼                                 ▼
+[Text Pathway]                     [Voice Pathway]
+Text Preprocessing                 Smart Audio Capture
+       │                                 │
+       ▼                                 ▼
+RoBERTa – GoEmotions               Faster-Whisper (Speech-to-Text) & Wav2Vec2 (Vocal Emotion)
+       │                                 │
+       └───────────────┬─────────────────┘
+                       ▼
+            Emotion Fusion Engine 
+         (Calculates Acoustic Dissonance)
+                       │
+                       ▼
+       Psychological Feature Engineering
+                       │
+                       ▼
+             Qwen LLM Interpretation
+                       │
+                       ▼
+         Patient / User Dashboard
+```
+
+---
+
+## 📂 Project Structure
+
+```text
+MindAura/
+├── ai/
+│   ├── preprocessing/     # Language detection, Tanglish correction, normalization
+│   ├── voice/             # Speech-to-text, acoustic emotion prediction, and fusion engine
+│   ├── training/          # Model training scripts
+│   └── inference/         # Emotion detection & feature engineering inference
+│
+├── backend/               # FastAPI application
+├── src/                   # Patient Web Application (React, TypeScript, Tailwind)
+├── frontend/              # Web application assets & configuration
+├── docs/                  # Documentation
+└── deployment/            # Docker & deployment configs
+```
+
+---
+
+## 🛠️ Tech Stack
+
+**AI / ML (Text & Voice)**
+- Python, PyTorch
+- Hugging Face Transformers
+- RoBERTa (GoEmotions) for Text Sentiment
+- Wav2Vec2 for Vocal Emotion
+- Faster-Whisper for Speech-to-Text
+- Librosa, SoundDevice, SoundFile (Audio Processing)
+- Ollama & Qwen3 14B
+
+**Backend**
+- FastAPI
+- Python
 
-Design ONLY the PATIENT/USER SIDE of a modern web application called "MindAura AI".
+**Frontend**
+- React, TypeScript
+- Tailwind CSS
+- Vite
+- Built with [Lovable](https://lovable.dev)
 
-Do NOT create a psychiatrist dashboard, doctor page, admin page, analytics dashboard, emotion dashboard, or clinical dashboard.
+**Deployment**
+- Docker
+- Docker Compose
 
-MindAura AI is a psychiatrist-assisted mental wellness platform where patients can express themselves through text, voice and video/face check-ins. The AI analysis happens privately in the background and is NOT shown to the patient.
+---
 
-CORE UX PRINCIPLE:
+## 🧠 AI Pipeline
 
-The patient should feel like they are using a calm, safe personal wellness app.
+### 1. Text Preprocessing
+- Language detection
+- Tanglish correction
+- Text normalization
+- Named entity protection
 
-It should NOT feel like:
+### 2. Emotion Detection
+RoBERTa-GoEmotions predicts probabilities across multiple emotions, including:
+`Joy` · `Sadness` · `Fear` · `Anger` · `Nervousness` · `Gratitude` · `Love` · `Optimism` · `Disappointment` · `Remorse` · and others.
 
-- A medical diagnosis website
+### 3. Psychological Feature Engineering
+The emotion probability vector is transformed into interpretable psychological metrics:
+- Emotional Intensity, Diversity, Valence
+- Positive Affect, Negative Affect, Ambivalence
 
-- An emotion detection tool
+**Rule-based psychological signals:**
+- Mental Fatigue, Cognitive Overload, Restlessness
+- Emotional Conflict, Self-Criticism, Social Withdrawal
 
-- A hospital portal
+### 4. LLM Interpretation
+Engineered psychological features are supplied as structured context to Qwen, which generates:
+- Emotion summary, Psychological interpretation, Supportive reflections, Wellness recommendations.
 
-- An AI evaluation system
+---
 
-Never show the patient:
+## 🎤 Voice & Emotion Fusion Module
 
-- Emotion scores
+When a user submits a voice journal entry, a specialized workflow triggers:
 
-- Sadness percentage
+1. **Audio Capture**: Real-time volume monitoring (VAD) records a clean `.wav` file.
+2. **Transcription**: The audio is converted to highly accurate text using Faster-Whisper.
+3. **Dual Analysis**:
+   - The *text* is passed to the NLP model for sentiment.
+   - The *audio* is passed to Wav2Vec2 to analyze the speaker's tone, pitch, and speed.
+4. **Emotion Fusion**: The Emotion Fusion Engine compares both results to detect **Acoustic Dissonance** (e.g., saying happy words but sounding sad) and outputs a comprehensive Mental Health Distress Score (0-100) and Risk Level.
 
-- Depression scores
+---
 
-- Anxiety scores
+## 🌿 Web Application Frontend
 
-- Facial emotion results
+The patient side of MindAura AI is designed as a calm, safe personal wellness app:
 
-- Voice emotion results
+- **Check-ins**: Express through text, voice, and video check-ins.
+- **Practices**: Guided breathing exercises, daily reflections, and mindfulness activities.
+- **Privacy-first**: Raw clinical and emotion scores remain private and are never displayed directly to patients.
 
-- Psychological classifications
+### Lovable Development
+This project is connected with [Lovable](https://lovable.dev/projects/7f23f89d-52ef-4e54-b255-4a2d6ae1ee83).
+Every change pushed to `main` syncs back to Lovable.
 
-- AI diagnostic predictions
-
-- Technical AI/model information
-
-The patient only sees their own check-ins, assigned practices, recordings, journal entries and completion progress.
-
---------------------------------
-
-VISUAL THEME
-
---------------------------------
-
-Use a premium, calm and modern wellness aesthetic.
-
-Color palette:
-
-Sage Green: #7FAF9B
-
-Dark Sage: #456B5C
-
-Warm Ivory: #F8F7F2
-
-White: #FFFFFF
-
-Muted Lavender: #B8A9D9
-
-Soft Peach: #E8B7A5
-
-Charcoal: #29332F
-
-Muted Gray: #78827E
-
-Use:
-
-- Warm ivory background
-
-- White rounded cards
-
-- Sage as the primary action color
-
-- Lavender and peach as subtle accents
-
-- Large rounded corners
-
-- Soft shadows
-
-- Plenty of whitespace
-
-- Elegant typography
-
-- Minimal icons
-
-- Soft nature-inspired visual elements
-
-Brand feeling:
-
-CALM + SAFE + HUMAN + MODERN + PREMIUM
-
-Add a subtle "aura" visual around the MindAura logo.
-
---------------------------------
-
-PATIENT NAVIGATION
-
---------------------------------
-
-Header:
-
-MindAura logo
-
-Home
-
-Check-ins
-
-Practices
-
-Profile
-
-Notification icon
-
-Profile avatar
-
-Keep navigation simple.
-
---------------------------------
-
-1. HOME PAGE
-
---------------------------------
-
-Hero:
-
-"Take a moment for yourself."
-
-Subtitle:
-
-"Express what's on your mind in a way that feels comfortable."
-
-Large primary button:
-
-"Start Today's Check-in"
-
-Add a beautiful subtle animated breathing/aura circle beside the hero.
-
-Below:
-
-"How would you like to check in?"
-
-Three interactive cards:
-
-WRITE
-
-"Put your thoughts into words."
-
-Notebook icon
-
-SPEAK
-
-"Sometimes talking is easier."
-
-Microphone icon
-
-VIDEO
-
-"Share a little more about your day."
-
-Camera icon
-
-Cards should:
-
-- Lift slightly on hover
-
-- Have a soft glow
-
-- Smoothly transition
-
-- Show a small icon animation
-
---------------------------------
-
-2. CHECK-IN FLOW
-
---------------------------------
-
-Create a smooth multi-step interactive experience.
-
-Top progress indicator:
-
-CHECK-IN
-
-1 → 2 → 3
-
-Page:
-
-"How would you like to check in today?"
-
-Allow:
-
-Write
-
-Speak
-
-Video
-
-The patient can select one or multiple options.
-
-After selecting an option, smoothly transition to that activity.
-
---------------------------------
-
-3. TEXT CHECK-IN
-
---------------------------------
-
-Title:
-
-"What's on your mind?"
-
-Subtitle:
-
-"Take your time. There is no right or wrong way to write."
-
-Large beautiful journal editor.
-
-Placeholder:
-
-"Start writing here..."
-
-Optional prompts:
-
-"What was the best part of your day?"
-
-"Was anything bothering you today?"
-
-"What would you like to talk about?"
-
-Button:
-
-"Save & Continue"
-
-Add a subtle floating leaf or gentle typing animation.
-
---------------------------------
-
-4. VOICE CHECK-IN
-
---------------------------------
-
-Title:
-
-"Want to talk instead?"
-
-Subtitle:
-
-"Sometimes it's easier to say what's on your mind."
-
-Large animated microphone.
-
-Before recording:
-
-"Tap to start"
-
-During recording:
-
-Animated circular microphone pulse
-
-Live audio waveform
-
-Timer
-
-Buttons:
-
-Pause
-
-Finish Recording
-
-After recording:
-
-"Your recording is saved."
-
-Buttons:
-
-Continue
-
-Record Again
-
-Do NOT show emotion detection or voice analysis.
-
---------------------------------
-
-5. VIDEO / FACE CHECK-IN
-
---------------------------------
-
-Title:
-
-"A little more about your day"
-
-Subtitle:
-
-"You can record a short video check-in if you'd like."
-
-Large rounded camera preview.
-
-Controls:
-
-Start Recording
-
-Stop
-
-Retake
-
-Continue
-
-Use a subtle animated camera frame.
-
-Do NOT mention facial emotion recognition or facial analysis anywhere on this page.
-
---------------------------------
-
-6. CHECK-IN COMPLETE
-
---------------------------------
-
-Create a beautiful completion screen.
-
-Animation:
-
-A small growing leaf / aura / sparkle animation.
-
-Title:
-
-"You're all checked in 🌿"
-
-Subtitle:
-
-"Thank you for taking a moment for yourself."
-
-Show:
-
-✓ Check-in saved securely
-
-Buttons:
-
-"View My Check-ins"
-
-"Done"
-
-Keep this screen calm and minimal.
-
---------------------------------
-
-7. MY CHECK-INS
-
---------------------------------
-
-Title:
-
-"My Check-ins"
-
-Show previous entries as beautiful timeline cards.
-
-Example:
-
-Today
-
-✓ Journal check-in
-
-Yesterday
-
-✓ Voice check-in
-
-Monday
-
-✓ Video check-in
-
-Each card can show:
-
-Date
-
-Type
-
-Duration where applicable
-
-Short user-written preview
-
-Allow the patient to open and view their own submissions.
-
-Never show AI analysis.
-
---------------------------------
-
-8. MY PRACTICES
-
---------------------------------
-
-This is an important feature.
-
-Psychiatrists can assign practices to patients.
-
-The patient sees:
-
-"Your Practices"
-
-Subtitle:
-
-"Small steps you can take at your own pace."
-
-Practice cards:
-
-5-Minute Breathing
-
-"Take a few quiet minutes to focus on your breathing."
-
-5 min
-
-[Start]
-
-Daily Reflection
-
-"Spend a few minutes reflecting on your day."
-
-10 min
-
-[Start]
-
-Gratitude Journal
-
-"Write down three things you're grateful for."
-
-5 min
-
-[Start]
-
-Mindfulness
-
-"Take a quiet moment to slow down and reconnect."
-
-5 min
-
-[Start]
-
-Show completion progress.
-
-Example:
-
-3 of 5 completed
-
-When completed:
-
-Use a gentle leaf/sparkle animation.
-
---------------------------------
-
-9. PRACTICE EXPERIENCE
-
---------------------------------
-
-Make practices interactive instead of static instructions.
-
-For example, breathing exercise:
-
-Large animated circle.
-
-INHALE
-
-↓
-
-HOLD
-
-↓
-
-EXHALE
-
-The circle expands and contracts smoothly.
-
-Show progress:
-
-02:34 / 05:00
-
-At completion:
-
-"Practice completed 🌱"
-
-Do not use clinical language.
-
---------------------------------
-
-10. MY PROGRESS
-
---------------------------------
-
-Do NOT show emotion or psychological scores.
-
-Instead show wellness activity:
-
-Check-ins completed
-
-Practices completed
-
-Current streak
-
-Days active
-
-Example:
-
-"Your week"
-
-Mon ✓
-
-Tue ✓
-
-Wed —
-
-Thu ✓
-
-Fri ✓
-
-Sat —
-
-Sun ✓
-
-Use soft visualizations rather than medical charts.
-
---------------------------------
-
-11. PROFILE
-
---------------------------------
-
-Simple profile page:
-
-Profile picture
-
-Name
-
-Email
-
-Preferences
-
-Notifications
-
-Privacy
-
-Help
-
-Add:
-
-"Your privacy matters."
-
-Explain that personal check-ins are securely stored and handled according to the application's privacy policy.
-
---------------------------------
-
-ANIMATIONS
-
---------------------------------
-
-Use subtle, premium animations throughout.
-
-Use:
-
-- Aura/ripple animation
-
-- Breathing animation
-
-- Microphone pulse
-
-- Live waveform
-
-- Card hover lift
-
-- Smooth page transitions
-
-- Growing leaf completion animation
-
-- Gentle fade and slide
-
-- Button micro-interactions
-
-- Progress animations
-
-Animation duration:
-
-approximately 300–800ms for normal interactions.
-
-Avoid:
-
-- Flashing
-
-- Excessive bouncing
-
-- Neon colors
-
-- Aggressive gradients
-
-- Medical warning screens
-
-- Red/green health indicators
-
-- Gamified cartoon styling
-
---------------------------------
-
-OVERALL PATIENT FLOW
-
---------------------------------
-
-HOME
-
-↓
-
-START CHECK-IN
-
-↓
-
-WRITE / SPEAK / VIDEO
-
-↓
-
-CHECK-IN COMPLETE
-
-↓
-
-MY CHECK-INS
-
-Separately:
-
-HOME
-
-↓
-
-MY PRACTICES
-
-↓
-
-ASSIGNED PRACTICE
-
-↓
-
-INTERACTIVE ACTIVITY
-
-↓
-
-COMPLETED ✓
-
-The final design should feel like:
-
-"Calm personal wellness space + modern technology"
-
-It should NOT feel like:
-
-"AI emotion detector + medical dashboard."
-
-Make it polished, responsive, interactive and suitable for a real-world product called MindAura AI.
-
-This project was built with [Lovable](https://lovable.dev).
-
-## Build with Lovable
-
-Continue developing this project in the [Lovable editor](https://lovable.dev/projects/7f23f89d-52ef-4e54-b255-4a2d6ae1ee83).
-
-- **Ship faster**: describe what you want to build and Lovable handles the code.
-- **Stay in sync**: every change made in Lovable is committed straight to this repository.
-- **Full ownership**: this code is yours. Push to `main` on GitHub and your changes sync back into Lovable, ready for your next prompt.
-
-## Development
-
-Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).
-
-```sh
-git clone <this-repository-url>
-cd <repository-name>
-npm i
+To run the frontend locally:
+```bash
+npm install
 npm run dev
 ```
+
+---
+
+## ⚙️ Installation
+
+### 1. Clone the repository
+```bash
+git clone https://github.com/sindhujasankaramoorthy/MindAura.AI.git
+cd MindAura.AI
+```
+
+### 2. Python Environment Setup
+Install all requirements (includes heavy ML dependencies for the Voice Module):
+```bash
+python -m venv .venv
+source .venv/bin/activate  # On Windows use: .venv\Scripts\activate
+pip install -r requirements.txt
+pip install -r backend/requirements.txt
+```
+
+### 3. Frontend setup
+```bash
+npm install
+```
+
+### 4. Install Ollama
+Download from [ollama.com](https://ollama.com), then pull the required model:
+```bash
+ollama pull qwen3:14b
+```
+
+---
+
+## ▶️ Running
+
+**To run the Full Voice Module (Interactive Terminal):**
+```bash
+python -m ai.voice.voice_pipeline
+```
+
+**Backend API:**
+```bash
+uvicorn backend.app.main:app --reload
+```
+
+**Frontend:**
+```bash
+npm run dev
+```
+
+---
+
+## 📌 Current Progress
+
+| Task | Status |
+|---|---|
+| Tanglish preprocessing | ✅ Done |
+| Text normalization | ✅ Done |
+| Text emotion detection pipeline | ✅ Done |
+| Voice transcription (Whisper) | ✅ Done |
+| Vocal emotion prediction (Wav2Vec2) | ✅ Done |
+| Text & Voice Emotion Fusion Engine | ✅ Done |
+| Rule-based psychological signals | ✅ Done |
+| Psychological feature engineering | ✅ Done |
+| Qwen interpretation refinement | ✅ Done |
+| Patient Web Frontend | ✅ Done |
+
+---
+
+## 👥 Contributors
+- Sindhuja Sankaramoorthy
+- Vishal Dharsan
