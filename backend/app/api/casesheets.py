@@ -120,18 +120,21 @@ def generate_ai_case_sheet(consultation_id: str):
     existing = cursor.fetchone()
 
     if existing:
-        if existing["status"] == "approved_locked":
+        # If consultation is actively in progress or new turns were added, allow regenerating draft
+        if existing["status"] == "approved_locked" and consultation.get("status") != "in_progress":
             conn.close()
-            raise HTTPException(status_code=403, detail="Cannot regenerate: Case sheet is approved and locked.")
+            raise HTTPException(status_code=403, detail="Cannot regenerate: Case sheet is approved and locked. Load a new scenario or create a consultation to test.")
         
         cursor.execute("""
         UPDATE casesheets
         SET updated_at = ?,
+            status = 'draft',
             extraction_source = ?,
             sections_json = ?,
-            multilingual_summary_json = ?
+            multilingual_summary_json = ?,
+            approval_json = ?
         WHERE id = ?
-        """, (now, source, json.dumps(sections), json.dumps(multilingual), existing["id"]))
+        """, (now, source, json.dumps(sections), json.dumps(multilingual), json.dumps({"is_approved": False}), existing["id"]))
         cs_id = existing["id"]
     else:
         cursor.execute("""

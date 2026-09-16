@@ -257,7 +257,9 @@ def load_scenario_into_consultation(consultation_id: str, scenario_key: str):
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, turns_to_insert)
 
-    cursor.execute("UPDATE consultations SET status = 'in_progress', duration_seconds = 145 WHERE id = ?", (consultation_id,))
+    cursor.execute("UPDATE consultations SET status = 'in_progress', duration_seconds = 145, is_approved = 0 WHERE id = ?", (consultation_id,))
+    # Reset any existing case sheet for this consultation back to draft so user can test generation
+    cursor.execute("UPDATE casesheets SET status = 'draft', approval_json = ? WHERE consultation_id = ?", (json.dumps({"is_approved": False}), consultation_id))
     conn.commit()
     conn.close()
 
