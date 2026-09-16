@@ -1,0 +1,164 @@
+/* MedTrust AI - Clinical Telehealth & Academic Platform Styles */
+
+:root {
+  --primary: #0f766e;
+  --primary-light: #14b8a6;
+  --primary-dark: #115e59;
+  --secondary: #0284c7;
+  --accent: #6366f1;
+  --dark: #0f172a;
+  --surface: #ffffff;
+  --surface-alt: #f8fafc;
+  --border: #e2e8f0;
+  --danger: #ef4444;
+  --warning: #f59e0b;
+  --success: #10b981;
+}
+
+body {
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: #f1f5f9;
+  color: #1e293b;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Glassmorphic Cards */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.05);
+}
+
+/* Video Stage */
+.video-tile {
+  position: relative;
+  background: #090d16;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.5);
+}
+
+.video-tile video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Audio Waveform Canvas */
+#waveform-canvas {
+  width: 100%;
+  height: 48px;
+  background: #0f172a;
+  border-radius: 8px;
+  display: block;
+}
+
+/* Live Pulse Animation */
+@keyframes pulse-dot {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+  70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+}
+
+.pulse-recording {
+  animation: pulse-dot 2s infinite;
+}
+
+/* Speaker Badge Styling */
+.badge-doctor {
+  background: #e0f2fe;
+  color: #0284c7;
+  border: 1px solid #bae6fd;
+}
+.badge-student {
+  background: #f3e8ff;
+  color: #7e22ce;
+  border: 1px solid #e9d5ff;
+}
+.badge-patient {
+  background: #dcfce7;
+  color: #15803d;
+  border: 1px solid #bbf7d0;
+}
+
+/* Section Box on Case Sheet */
+.casesheet-section {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  transition: all 0.2s ease;
+}
+
+.casesheet-section:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 2px 10px -2px rgba(15, 118, 110, 0.08);
+}
+
+.section-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #0f766e;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  margin-right: 8px;
+}
+
+/* Signature Canvas */
+#signature-pad {
+  border: 2px dashed #94a3b8;
+  border-radius: 8px;
+  background: #ffffff;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+/* Tab Navigation */
+.nav-tab.active {
+  border-bottom: 3px solid #0f766e;
+  color: #0f766e;
+  font-weight: 700;
+}
+
+/* Medication Row Transition */
+.med-row {
+  transition: background-color 0.2s ease;
+}
+.med-row:hover {
+  background-color: #f8fafc;
+}
+
+/* Print Overrides */
+@media print {
+  nav, .no-print, header, #sidebar {
+    display: none !important;
+  }
+  body {
+    background: #ffffff !important;
+  }
+}

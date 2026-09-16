@@ -150,3 +150,6 @@ ai/training/raw_audio/
 !ai/training/preprocess_audio.py
 !ai/training/build_metadata.py
 !ai/voice/test_qwen_voice.py
+
+# IDE & Assistant cache
+.claude/
