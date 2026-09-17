@@ -438,17 +438,21 @@ class EmotionPreservingCorrector:
             word = token
             word_lower = word.lower()
 
-            # 1. Unknown tokens or Delimiters/Placeholders (preserved as-is)
-            if lang == TokenLanguage.UNKNOWN:
-                candidate_options.append([word])
-                continue
-
-            # 1b. Custom overrides applied universally (before language-path branching)
+            # 1. Custom overrides applied universally, BEFORE the UNKNOWN
+            # check below -- a misspelling the language detector can't
+            # confidently classify (e.g. "anxios", which isn't a real English
+            # or Tanglish word) still needs its override applied instead of
+            # being preserved as-is.
             if word_lower in self._custom_overrides:
                 corrected = self._custom_overrides[word_lower]
                 if word.istitle(): corrected = corrected.title()
                 elif word.isupper(): corrected = corrected.upper()
                 candidate_options.append([corrected])
+                continue
+
+            # 1b. Unknown tokens or Delimiters/Placeholders (preserved as-is)
+            if lang == TokenLanguage.UNKNOWN:
+                candidate_options.append([word])
                 continue
 
             # 2. English Correction Path
@@ -553,11 +557,27 @@ class EmotionPreservingCorrector:
                             transliteration_map[c] = w
                             
                     # 5. Skip translation here (moved to final step in text_normalizer)
-                    
+
+                    # 6. Known-mapping guard: if this chunk contains a word
+                    # WORD_REPLACEMENTS already has a direct English mapping
+                    # for, keep it as the RAW (untransliterated) chunk instead
+                    # of the Tamil-script transliteration. normalize_tanglish_
+                    # semantics() (called once, on the full reconstructed
+                    # sentence, in TextNormalizer.normalize()) matches against
+                    # Latin-script keys — it can never match Tamil Unicode, so
+                    # transliterating first was silently bypassing semantic
+                    # mapping entirely. Chunks with no known word still get
+                    # transliterated exactly as before, preserving the
+                    # existing language-detection -> NLLB fallback path for
+                    # genuinely unmapped Tanglish.
+                    chunk_words = re.findall(r"[a-zA-Z']+", full_chunk.lower())
+                    has_known_mapping = any(w in WORD_REPLACEMENTS for w in chunk_words)
+                    chunk_final = full_chunk if has_known_mapping else chunk_indic
+
                     merged_options_autocorrect.append([chunk_autocorrect])
                     merged_options_phrase.append([chunk_phrase])
                     merged_options_canonical.append([chunk_canonical])
-                    merged_options_indic.append([chunk_indic])
+                    merged_options_indic.append([chunk_final])
                 else:
                     merged_options_autocorrect.append([full_chunk])
                     merged_options_phrase.append([full_chunk])

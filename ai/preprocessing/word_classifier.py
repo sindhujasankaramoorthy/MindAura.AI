@@ -35,13 +35,29 @@ class WordClassifier:
             
         try:
             import fasttext
-            # Try to load from current directory or relative to this file
-            model_path = "lid.176.bin"
+
+            # Fixed, project-relative location (ai/preprocessing/models/) so
+            # this works regardless of the caller's current working
+            # directory -- not a personal/absolute path. This mirrors the
+            # existing models/ convention used elsewhere in the repo (e.g.
+            # ai/training/models/), and is gitignored the same way (*.bin,
+            # models/ in .gitignore) since it's a ~130MB binary that
+            # shouldn't be committed. See README.md "Installation" for the
+            # download command.
+            model_path = os.path.join(os.path.dirname(__file__), "models", "lid.176.bin")
             if not os.path.exists(model_path):
-                model_path = os.path.join(os.path.dirname(__file__), "lid.176.bin")
+                raise FileNotFoundError(
+                    f"fastText language-id model not found at {model_path}. "
+                    "Download it with:\n"
+                    "  mkdir -p ai/preprocessing/models && "
+                    "curl -L -o ai/preprocessing/models/lid.176.bin "
+                    "https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.bin\n"
+                    "Falling back to zipf-frequency + Tanglish-vocabulary "
+                    "classification only (no fastText language ID)."
+                )
             self.ft_model = fasttext.load_model(model_path)
         except Exception as e:
-            logger.warning(f"Failed to load fasttext model: {e}")
+            logger.warning(f"Failed to load fasttext model, falling back to non-fastText classification: {e}")
             self.ft_model = None
 
         self.supported_langs = {
@@ -65,10 +81,17 @@ class WordClassifier:
             # FastText expects single line string without newlines
             safe_word = word.replace('\n', ' ').strip()
             if safe_word:
-                preds = self.ft_model.predict(safe_word)
-                lang_code = preds[0][0].replace('__label__', '')
-                if lang_code in self.supported_langs:
-                    return self.supported_langs[lang_code]
+                try:
+                    preds = self.ft_model.predict(safe_word)
+                    lang_code = preds[0][0].replace('__label__', '')
+                    if lang_code in self.supported_langs:
+                        return self.supported_langs[lang_code]
+                except Exception as e:
+                    # A load-time success doesn't guarantee predict() won't
+                    # fail at use-time (e.g. a fasttext/numpy version
+                    # mismatch) -- don't let that crash classification, just
+                    # fall through to the fuzzy-vocabulary check below.
+                    logger.warning(f"fastText predict() failed, falling back: {e}")
         
         # If it falls through to UNKNOWN, perform a fuzzy check against Tanglish vocabulary
         if self.tanglish_words:

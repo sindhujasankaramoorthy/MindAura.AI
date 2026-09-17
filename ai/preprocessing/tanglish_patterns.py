@@ -31,6 +31,7 @@ WORD_REPLACEMENTS = {
     "purila": "do not understand",
     "panren": "do",
     "kashtama": "difficult",
+    "kastama": "difficult",  # common spelling without the silent 'h'
     "sogama": "sad",
     "kavalaya": "worried",
     "valikuthu": "hurts",

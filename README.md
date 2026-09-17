@@ -178,6 +178,25 @@ Download from [ollama.com](https://ollama.com), then pull the required model:
 ollama pull qwen3:14b
 ```
 
+### 5. fastText language-ID model (optional)
+The Tanglish word classifier uses fastText for language identification as
+one signal among several. It's a ~130MB binary, not committed to git:
+```bash
+mkdir -p ai/preprocessing/models
+curl -L -o ai/preprocessing/models/lid.176.bin \
+  https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.bin
+```
+Without it, the pipeline still works — it falls back to Zipf-frequency and
+Tanglish-vocabulary matching for language detection.
+
+> **Known compatibility issue:** `fasttext==0.9.3` calls a NumPy API
+> (`copy=False` in `np.array`) that raises under NumPy 2.x. If you hit
+> `ValueError: Unable to avoid copy...` when this model loads, either pin
+> `numpy<2` for this environment or wait for an updated `fasttext` release —
+> the code already catches this at classification time and falls back
+> automatically, but the language-ID signal from fastText is effectively
+> unavailable until one side of that pin is updated.
+
 ---
 
 ## ▶️ Running
