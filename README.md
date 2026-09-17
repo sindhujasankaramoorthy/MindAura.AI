@@ -11,6 +11,7 @@ MindAura is an AI-powered mental wellness platform that analyzes users' journal 
 - [Tech Stack](#️-tech-stack)
 - [AI Pipeline](#-ai-pipeline)
 - [Voice & Emotion Fusion Module](#-voice--emotion-fusion-module)
+- [Web Application Frontend](#-web-application-frontend)
 - [Installation](#️-installation)
 - [Running the App](#️-running)
 - [Current Progress](#-current-progress)
@@ -31,7 +32,7 @@ MindAura is an AI-powered mental wellness platform that analyzes users' journal 
 | ⚙️ Emotion Fusion Engine | Fuses text and vocal emotions to detect "Acoustic Dissonance" |
 | 📊 Psychological feature engineering | Converts raw emotion scores into interpretable psychological metrics |
 | 🧠 LLM-based interpretation | Generates supportive, context-aware feedback using Qwen |
-| 📈 Emotion statistics dashboard | Visualizes emotion trends and psychological indicators |
+| 🌿 Patient Wellness Portal | Calm, human, and modern wellness check-in interface built with Lovable |
 | 🔒 Non-diagnostic design | Provides supportive insights, not clinical diagnoses |
 
 ---
@@ -61,7 +62,7 @@ RoBERTa – GoEmotions               Faster-Whisper (Speech-to-Text) & Wav2Vec2 
              Qwen LLM Interpretation
                        │
                        ▼
-                User Dashboard
+         Patient / User Dashboard
 ```
 
 ---
@@ -77,7 +78,8 @@ MindAura/
 │   └── inference/         # Emotion detection & feature engineering inference
 │
 ├── backend/               # FastAPI application
-├── frontend/              # React application
+├── src/                   # Patient Web Application (React, TypeScript, Tailwind)
+├── frontend/              # Web application assets & configuration
 ├── docs/                  # Documentation
 └── deployment/            # Docker & deployment configs
 ```
@@ -100,8 +102,10 @@ MindAura/
 - Python
 
 **Frontend**
-- React
-- JavaScript
+- React, TypeScript
+- Tailwind CSS
+- Vite
+- Built with [Lovable](https://lovable.dev)
 
 **Deployment**
 - Docker
@@ -149,12 +153,32 @@ When a user submits a voice journal entry, a specialized workflow triggers:
 
 ---
 
+## 🌿 Web Application Frontend
+
+The patient side of MindAura AI is designed as a calm, safe personal wellness app:
+
+- **Check-ins**: Express through text, voice, and video check-ins.
+- **Practices**: Guided breathing exercises, daily reflections, and mindfulness activities.
+- **Privacy-first**: Raw clinical and emotion scores remain private and are never displayed directly to patients.
+
+### Lovable Development
+This project is connected with [Lovable](https://lovable.dev/projects/7f23f89d-52ef-4e54-b255-4a2d6ae1ee83).
+Every change pushed to `main` syncs back to Lovable.
+
+To run the frontend locally:
+```bash
+npm install
+npm run dev
+```
+
+---
+
 ## ⚙️ Installation
 
 ### 1. Clone the repository
 ```bash
 git clone https://github.com/sindhujasankaramoorthy/MindAura.AI.git
-cd MindAura
+cd MindAura.AI
 ```
 
 ### 2. Python Environment Setup
@@ -168,7 +192,6 @@ pip install -r backend/requirements.txt
 
 ### 3. Frontend setup
 ```bash
-cd frontend
 npm install
 ```
 
@@ -177,25 +200,6 @@ Download from [ollama.com](https://ollama.com), then pull the required model:
 ```bash
 ollama pull qwen3:14b
 ```
-
-### 5. fastText language-ID model (optional)
-The Tanglish word classifier uses fastText for language identification as
-one signal among several. It's a ~130MB binary, not committed to git:
-```bash
-mkdir -p ai/preprocessing/models
-curl -L -o ai/preprocessing/models/lid.176.bin \
-  https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.bin
-```
-Without it, the pipeline still works — it falls back to Zipf-frequency and
-Tanglish-vocabulary matching for language detection.
-
-> **Known compatibility issue:** `fasttext==0.9.3` calls a NumPy API
-> (`copy=False` in `np.array`) that raises under NumPy 2.x. If you hit
-> `ValueError: Unable to avoid copy...` when this model loads, either pin
-> `numpy<2` for this environment or wait for an updated `fasttext` release —
-> the code already catches this at classification time and falls back
-> automatically, but the language-ID signal from fastText is effectively
-> unavailable until one side of that pin is updated.
 
 ---
 
@@ -206,14 +210,14 @@ Tanglish-vocabulary matching for language detection.
 python -m ai.voice.voice_pipeline
 ```
 
-**Backend API**
+**Backend API:**
 ```bash
 uvicorn backend.app.main:app --reload
 ```
 
-**Frontend**
+**Frontend:**
 ```bash
-npm start
+npm run dev
 ```
 
 ---
@@ -231,17 +235,7 @@ npm start
 | Rule-based psychological signals | ✅ Done |
 | Psychological feature engineering | ✅ Done |
 | Qwen interpretation refinement | ✅ Done |
-| Frontend integration | 🚧 In Progress |
-
----
-
-## 🔭 Upcoming Features
-
-- **Custom Speech Emotion Recognition (SER) Model**
-  - Fine-tune your own SER model.
-  - Evaluate it properly.
-  - Deploy it as a FastAPI endpoint.
-  - Integrate it into MindAura.
+| Patient Web Frontend | ✅ Done |
 
 ---
 
