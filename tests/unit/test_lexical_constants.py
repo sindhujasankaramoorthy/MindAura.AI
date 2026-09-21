@@ -1,4 +1,4 @@
-from ai.preprocessing.lexical_constants import (
+from ai.text.language.lexical_constants import (
     FUZZY_MATCH_THRESHOLD,
     ZIPF_ENGLISH_THRESHOLD_LOOSE,
     ZIPF_ENGLISH_THRESHOLD_STANDARD,

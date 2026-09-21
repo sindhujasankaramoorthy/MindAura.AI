@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from backend.app.database import init_db
-from backend.app.api import auth, patients, consultations, casesheets, journals
+from backend.app.api import auth, patients, consultations, casesheets, journals, checkins
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("medtrust")
@@ -51,6 +51,7 @@ app.include_router(patients.router)
 app.include_router(consultations.router)
 app.include_router(casesheets.router)
 app.include_router(journals.router)
+app.include_router(checkins.router)
 
 
 # --- Real-Time WebSocket Connection Manager for Consultations ---

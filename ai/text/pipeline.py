@@ -1,3 +1,15 @@
+"""
+Standalone multilingual text-processing pipeline.
+
+Public entry point: process_text(text) -> dict (see bottom of this file).
+Everything above it (TextNormalizer and friends) is the existing
+preprocessing engine (language routing, NER protection, spell correction,
+Tanglish handling, sentence reconstruction) that process_text() builds on.
+
+This pipeline does NOT import or initialize RoBERTa, Qwen, Ollama, or any
+emotion/psychiatrist-reasoning code -- it stops at JSON. Those components
+live under temporary/models/ until a later task reconnects them.
+"""
 import logging
 import re
 from typing import Dict, Any, Callable
@@ -6,8 +18,18 @@ import langdetect
 
 from langdetect.lang_detect_exception import LangDetectException
 
-from .tanglish_patterns import WORD_REPLACEMENTS, normalize_tanglish_semantics
-from .advanced_correction import EmotionPreservingCorrector
+from ai.text.tanglish.rules import WORD_REPLACEMENTS, normalize_tanglish_semantics
+from ai.text.tanglish.detector import is_tanglish_fallback
+from ai.text.normalization.correction import EmotionPreservingCorrector
+from ai.text.language.script_detector import detect_script
+from ai.text.translation.router import translate_to_english as route_translate
+from ai.text.expressive.detector import detect_expressive_texting
+from ai.text.schemas.output import (
+    build_language_info,
+    build_success_output,
+    build_error_output,
+    iso_to_language_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +90,7 @@ class TextNormalizer:
         processed = re.sub(r'(.)\1{2,}', r'\1\1', processed)
         processed = re.sub(r'(?<![\w])i(?![\w])', 'I', processed)
         
-        from .language_boundary import ENGLISH_MISSPELLINGS
+        from ai.text.language.boundary import ENGLISH_MISSPELLINGS
         for k, v in ENGLISH_MISSPELLINGS.items():
             processed = re.sub(r'\b' + re.escape(k) + r'\b', v, processed, flags=re.IGNORECASE)
             
@@ -105,19 +127,52 @@ class TextNormalizer:
 
         logger.debug("Raw language detection input:")
         
-        from .language_boundary import classify_sentence_language
+        from ai.text.language.boundary import classify_sentence_language
         routing_info = classify_sentence_language(text)
         logger.debug(f"English confidence: {routing_info['confidence']}")
         
         has_native = bool(re.search(r'[\u0900-\u0DFF]', text))
-        
+
         pipeline = "UNKNOWN"
         if routing_info['pipeline'] == 'ENGLISH':
             pipeline = "ENGLISH"
         elif has_native:
             pipeline = "NATIVE"
         else:
+            # Without a confident English or native-Indic-script signal,
+            # the old assumption was always Tanglish (Tamil in Latin
+            # script). That breaks for genuinely different Latin-script
+            # languages (Spanish, French, ...): with no fastText available
+            # to disambiguate, a single coincidental hit against the
+            # ~242k-word Tanglish vocabulary isn't enough evidence (short
+            # common words collide across languages by chance) -- require a
+            # clear majority of words to match before trusting "Tanglish".
+            # Otherwise, if langdetect confidently names a specific other
+            # language, route as OTHER so it skips Tanglish-specific
+            # correction/transliteration and goes straight to the
+            # translation router.
+            tanglish_vocab = self.advanced_corrector.language_detector.word_classifier.tanglish_words
+            words = re.findall(r"[a-zA-Z']+", text.lower())
+            tanglish_hit_ratio = (
+                sum(1 for w in words if w in tanglish_vocab) / len(words) if words else 0.0
+            )
+
             pipeline = "TANGLISH"
+            # langdetect is unreliable on short input (verified: single
+            # nonsense words like "anxios"/"minf" get confidently but
+            # wrongly guessed as Portuguese/Estonian/etc) -- require at
+            # least 3 words before trusting its verdict for this routing
+            # decision, matching the same threshold already used by
+            # detect_language() elsewhere in this file. Below that, stay on
+            # the TANGLISH path so single ambiguous words still reach
+            # correct()'s custom-overrides / SymSpell correction instead of
+            # skipping it.
+            if tanglish_hit_ratio < 0.5 and words and len(words) >= 3:
+                try:
+                    if langdetect.detect(text) != "en":
+                        pipeline = "OTHER"
+                except LangDetectException:
+                    pass
             
         logger.debug(f"Selected language pipeline: {pipeline}")
 
@@ -146,7 +201,6 @@ class TextNormalizer:
             logger.info("NER Entities:\n[]")
 
         # 4. Token-Level Language Detection (runs on protected text)
-        from .language_detector import TokenLanguage
         token_classifications = self.advanced_corrector.language_detector.detect(protected_text, [], pipeline=pipeline)
         
         # Calculate Sentence Analysis stats
@@ -179,7 +233,15 @@ class TextNormalizer:
         initial_lang_info = self.detect_language(text)
         
         # 5. Pipeline execution (English Spell Correction, Tanglish Autocorrect -> IndicXlit -> AI4Bharat)
-        corrected, stages_dict, transliteration_map = self.advanced_corrector.correct(protected_text, pipeline=pipeline)
+        # "OTHER" (a Latin-script language that's neither English nor
+        # Tanglish, e.g. Spanish/French) skips this entirely -- running
+        # English SymSpell or Tanglish fuzzy-matching over it would mangle
+        # words in a language neither of those was ever meant to handle.
+        # The translation router (langdetect + NLLB) handles it untouched.
+        if pipeline == "OTHER":
+            corrected, stages_dict, transliteration_map = protected_text, {}, {}
+        else:
+            corrected, stages_dict, transliteration_map = self.advanced_corrector.correct(protected_text, pipeline=pipeline)
         
         logger.info("After Autocorrect:\n" + stages_dict.get("autocorrect", corrected))
         logger.info("After Phrase Normalization:\n" + stages_dict.get("phrase", corrected))
@@ -287,7 +349,7 @@ class TextNormalizer:
                     corrected_token = cand
                     was_corrected = True
                         
-                from ai.preprocessing.tanglish_canonical import normalize_canonical_tanglish
+                from ai.text.tanglish.canonical import normalize_canonical_tanglish
                 canonical_token = normalize_canonical_tanglish(corrected_token)
                 transliterated_token = transliteration_map.get(canonical_token, canonical_token)
                 translated_token = normalize_tanglish_semantics(corrected_token)
@@ -325,5 +387,138 @@ class TextNormalizer:
             "original_language": initial_lang_info["language_name"],
             "original_text": original_text,
             "processed_text": final_text,
-            "translated_text": translated_text
+            "translated_text": translated_text,
+            # Raw per-token (token, language_label) pairs, e.g. ("enaku",
+            # "Tanglish") -- used by process_text() to build the language/
+            # mixed-language/tanglish_fallback_used summary without
+            # re-parsing the stringified `metadata` list above.
+            "token_classifications": [(t[0], t[1]) for t in token_classifications],
+            "language_pipeline": pipeline,
         }
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# PUBLIC ENTRY POINT
+# ─────────────────────────────────────────────────────────────────────────
+
+_normalizer_instance = None
+
+# Generous cap for a journal/blog entry -- guards against pathologically
+# large input rather than limiting normal use.
+MAX_INPUT_LENGTH = 20000
+
+_KNOWN_TOKEN_LABELS = {
+    "English", "Tanglish", "TAMIL", "HINDI", "TELUGU", "MALAYALAM",
+    "KANNADA", "BENGALI", "MARATHI", "GUJARATI", "PUNJABI", "URDU",
+}
+
+
+def _get_normalizer() -> "TextNormalizer":
+    """Lazy singleton -- TextNormalizer's own models (SymSpell, NER) load
+    once per process, never per-call."""
+    global _normalizer_instance
+    if _normalizer_instance is None:
+        _normalizer_instance = TextNormalizer()
+    return _normalizer_instance
+
+
+def process_text(text: str) -> Dict[str, Any]:
+    """
+    The Text Module's single public entry point.
+
+        from ai.text.pipeline import process_text
+        result = process_text(user_input)
+
+    Handles language detection (including Tamil-via-Latin/"Tanglish"
+    fallback), routes translation through IndicTrans2 (Indian languages) or
+    NLLB-200 (everything else), reconstructs a contextual English sentence,
+    detects expressive alphabet extension, and returns one JSON-serializable
+    dict. Never raises -- always returns a dict with a "status" field.
+
+    Does NOT touch RoBERTa/Qwen/Ollama/emotion analysis/psychiatrist
+    reasoning; the pipeline stops at JSON.
+    """
+    if text is None or not isinstance(text, str) or not text.strip():
+        return build_error_output(
+            text if isinstance(text, str) else "",
+            "empty_input",
+            "Input text is empty or invalid.",
+        )
+
+    if len(text) > MAX_INPUT_LENGTH:
+        return build_error_output(
+            text,
+            "input_too_long",
+            f"Input exceeds the maximum supported length of {MAX_INPUT_LENGTH} characters.",
+        )
+
+    try:
+        normalizer = _get_normalizer()
+        norm_result = normalizer.normalize(text, translator_fn=route_translate)
+    except Exception as e:
+        logger.exception("Text pipeline processing failed.")
+        return build_error_output(text, "processing_failed", str(e))
+
+    try:
+        script = detect_script(text)
+        token_classifications = norm_result["token_classifications"]
+
+        if norm_result.get("language_pipeline") == "OTHER":
+            # The pipeline already determined this is a genuinely different
+            # Latin-script language (not English, not Tanglish -- e.g.
+            # Spanish/French). Per-word classification isn't reliable here
+            # (no fastText available to tell "unknown Spanish word" apart
+            # from "unknown Tanglish word"), so trust the whole-text
+            # langdetect verdict instead of the token classifier.
+            fallback_name = None
+            try:
+                fallback_name = iso_to_language_name(langdetect.detect(text))
+            except LangDetectException:
+                pass
+            language_info = build_language_info([], script, False, fallback_name)
+        else:
+            tanglish_used = is_tanglish_fallback(token_classifications)
+
+            # If the token classifier didn't recognize any language at all,
+            # fall back to a whole-text language guess so `language` isn't
+            # just empty.
+            fallback_language_name = None
+            if not any(label in _KNOWN_TOKEN_LABELS for _token, label in token_classifications):
+                try:
+                    if len(text.split()) >= 2:
+                        fallback_language_name = iso_to_language_name(langdetect.detect(text))
+                except LangDetectException:
+                    pass
+
+            language_info = build_language_info(
+                token_classifications, script, tanglish_used, fallback_language_name
+            )
+        expressive = detect_expressive_texting(text)
+
+        contextual_final_sentence = norm_result["translated_text"]
+        if language_info["mixed_language"] or language_info["tanglish_fallback_used"]:
+            # Chunk-substitution reconstruction can leave code-switched
+            # sentences grammatically awkward even when the meaning is
+            # right (e.g. "Feel Ram told me I very difficult."). Run an
+            # NLLB English->English fluency pass to smooth it -- only for
+            # this case, not clean single-language input, since translating
+            # already-fluent English through NLLB has been observed to
+            # hallucinate content that was never said. Falls back to the
+            # pre-fluency-pass sentence if this fails or returns nothing.
+            try:
+                from ai.text.translation.nllb import translate_to_english as _fluency_pass
+                fluent = _fluency_pass(contextual_final_sentence, "en")
+                if fluent and fluent.strip():
+                    contextual_final_sentence = fluent
+            except Exception as e:
+                logger.warning(f"Fluency pass failed, keeping pre-pass sentence: {e}")
+
+        return build_success_output(
+            raw_input=text,
+            contextual_final_sentence=contextual_final_sentence,
+            expressive_texting=expressive,
+            language=language_info,
+        )
+    except Exception as e:
+        logger.exception("Failed to build text pipeline output.")
+        return build_error_output(text, "output_construction_failed", str(e))

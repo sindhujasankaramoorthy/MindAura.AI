@@ -14,7 +14,7 @@ pytest.importorskip("torch")
 pytest.importorskip("transformers")
 pytest.importorskip("symspellpy")
 
-from ai.preprocessing.text_normalizer import TextNormalizer
+from ai.text.pipeline import TextNormalizer
 
 
 def test_normalize_returns_expected_keys():

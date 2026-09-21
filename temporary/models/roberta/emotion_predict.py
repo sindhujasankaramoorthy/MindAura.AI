@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
-from ai.preprocessing.text_normalizer import TextNormalizer
-from ai.inference.psychological_signals import PsychologicalSignalExtractor
+from ai.text.pipeline import TextNormalizer
+from psychological_signals import PsychologicalSignalExtractor
 from ai.model_registry import get_roberta_go_emotions, get_nllb_600m
 
 

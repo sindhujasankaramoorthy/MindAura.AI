@@ -11,7 +11,7 @@ except ImportError:
         sys.path.append(project_root)
     from ai.model_registry import get_roberta_go_emotions
 
-from ai.preprocessing.text_normalizer import TextNormalizer
+from ai.text.pipeline import TextNormalizer
 
 logger = logging.getLogger(__name__)
 

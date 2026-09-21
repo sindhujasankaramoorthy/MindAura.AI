@@ -1,4 +1,4 @@
-from ai.inference.psychological_signals import (
+from temporary.models.roberta.psychological_signals import (
     extract_text_signal_scores,
     merge_emotion_signal_scores,
     PsychologicalSignalExtractor,

@@ -1,5 +1,6 @@
 import re
 import logging
+import unicodedata
 from typing import List, Tuple, Set
 
 from .word_classifier import WordClassifier
@@ -75,9 +76,18 @@ class LanguageDetector:
             scores[TokenLanguage.ENGLISH] = 0.25
             scores[TokenLanguage.TANGLISH] = 0.25
         else:
+            # A native-script word (Devanagari/Tamil/Telugu/...) is a
+            # deterministic fact, not a statistical guess -- unlike
+            # English-vs-Tanglish, which genuinely is ambiguous. Return
+            # immediately, skipping the English boundary/pipeline biases
+            # below: those exist to help the ambiguous English/Tanglish
+            # case and were diluting an already-certain native-script
+            # classification, letting neighboring-word "stay in the same
+            # language" momentum flip it to English at a language-switch
+            # boundary in mixed sentences.
             native_lang = getattr(TokenLanguage, lang_str, lang_str)
-            scores[native_lang] = 0.9
-            
+            return {native_lang: 1.0}
+
         # 4. English Boundary Bias
         if boundary_lang == "ENGLISH":
             scores[TokenLanguage.ENGLISH] = scores.get(TokenLanguage.ENGLISH, 0) + 0.4
@@ -98,7 +108,7 @@ class LanguageDetector:
         words_to_classify = []
         current_char_idx = 0
         
-        from .language_boundary import classify_token_language
+        from .boundary import classify_token_language
         
         for i, token in enumerate(tokens_with_delimiters):
             if not token:
@@ -107,10 +117,26 @@ class LanguageDetector:
             end_idx = start_idx + len(token)
             current_char_idx = end_idx
             
-            # Identify delimiters or non-alphabetic tokens
+            # Identify delimiters or non-alphabetic tokens.
+            # NOTE: plain str.isalpha() is wrong here for Indic scripts --
+            # Devanagari/Telugu/Malayalam/etc. words routinely contain
+            # combining vowel signs (Unicode category "Mn", e.g. the ు in
+            # "మీ" or ి in "मुझे"), which isalpha() reports as False, so
+            # str.isalpha() on the whole word returns False even though
+            # every character is a normal part of a word. This used to
+            # silently drop every native-script word as a "delimiter",
+            # which was masked by a langdetect-based fallback for
+            # pure-native-script sentences but silently lost the
+            # native-language portion of any mixed-language sentence.
+            # Category L* (letters) or Mn/Mc (combining/spacing marks,
+            # which only ever attach to a preceding letter) both count.
             is_word = False
             if i % 2 != 0:
-                is_word = token.replace("'", "").isalpha()
+                stripped = token.replace("'", "")
+                is_word = bool(stripped) and all(
+                    unicodedata.category(ch)[0] in ("L", "M") or unicodedata.category(ch) == "Nd"
+                    for ch in stripped
+                )
                 # Check for NER placeholders
                 if token.startswith("<") and token.endswith(">") and "_" in token:
                     is_word = False

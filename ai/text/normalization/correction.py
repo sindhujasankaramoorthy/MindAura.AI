@@ -21,11 +21,11 @@ from typing import Set, Dict, List, Tuple, Optional
 import torch
 
 from ai.model_registry import ModelRegistry, get_gpt2_perplexity_model, get_indictrans2
-from .tanglish_patterns import (
+from ai.text.tanglish.rules import (
     normalize_tanglish_semantics, 
     WORD_REPLACEMENTS
 )
-from .language_detector import LanguageDetector, TokenLanguage
+from ai.text.language.detector import LanguageDetector, TokenLanguage
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +72,15 @@ _NEGATION_PAIRS: List[Tuple[re.Pattern, str]] = [
     (re.compile(r'\b' + re.escape(k) + r'\b', re.IGNORECASE), v)
     for k, v in sorted(NEGATION_RECOVERY_MAP.items(), key=lambda x: len(x[0]), reverse=True)
 ]
+
+# Native-language chunk label (as produced by LanguageDetector/WordClassifier)
+# -> ISO 639-1, for routing per-chunk translation (see the native-language
+# branch in correct() below).
+_CHUNK_LANG_TO_ISO: Dict[str, str] = {
+    "TAMIL": "ta", "HINDI": "hi", "TELUGU": "te", "MALAYALAM": "ml",
+    "KANNADA": "kn", "BENGALI": "bn", "MARATHI": "mr", "GUJARATI": "gu",
+    "PUNJABI": "pa", "URDU": "ur",
+}
 
 # ──────────────────────────────────────────────────────────────────────
 # C. EMOTIONAL VOCABULARY PROTECTION
@@ -236,7 +245,7 @@ class EmotionPreservingCorrector:
 
         # NER Protection Layer
         try:
-            from ai.preprocessing.ner_protection import NERProtection
+            from ai.text.entities.protector import NERProtection
             self.ner_protection = NERProtection()
         except Exception as e:
             logger.error(f"Failed to initialize NER Protection: {e}")
@@ -350,7 +359,7 @@ class EmotionPreservingCorrector:
         Uses SymSpell for English auto-correction.
         If the word is known, slang, or closely matched, returns candidate pool.
         """
-        from .language_boundary import INTERNET_SLANG
+        from ai.text.language.boundary import INTERNET_SLANG
         
         word = token
         word_lower = word.lower()
@@ -408,7 +417,7 @@ class EmotionPreservingCorrector:
 
         # Use the official Tanglish model for spelling correction
         try:
-            from ai.tanglish_model.src.autocorrect import correct_word
+            from ai.text.tanglish.model.src.autocorrect import correct_word
             tanglish_result = correct_word(word)
             corrected = tanglish_result.get("corrected", word)
             logger.debug(f"[Tanglish Correction Path] Corrected '{word}' -> '{corrected}'")
@@ -505,18 +514,41 @@ class EmotionPreservingCorrector:
                         j += 1
                         continue
 
-                    if (next_slot and len(next_slot) == 1 and
-                            isinstance(next_slot[0], str)):
-                        if next_slot[0].startswith("<") and next_slot[0].endswith(">") and "_" in next_slot[0]:
+                    # Bridge over a short run of plain-string slots (e.g. a
+                    # single embedded English word plus its surrounding
+                    # whitespace -- "मुझे बहुत [stress] हो रहा है" is one
+                    # Hindi clause with "stress" dropped in in the middle,
+                    # not two separate clauses) if the SAME-language chunk
+                    # resumes within a small window. Without this, a clause
+                    # like that gets split into two independently-
+                    # translated fragments that don't grammatically fuse
+                    # back together (e.g. "...is happening" left dangling).
+                    # Bounded to BRIDGE_WINDOW slots so this can't bridge
+                    # across an entire unrelated sentence.
+                    BRIDGE_WINDOW = 4
+                    bridged = False
+                    k = j
+                    bridge_parts: list = []
+                    while k < len(candidate_options) and k < j + BRIDGE_WINDOW:
+                        candidate = candidate_options[k]
+                        if (candidate and isinstance(candidate[0], tuple) and
+                                len(candidate[0]) == 3 and candidate[0][2] is True and
+                                candidate[0][1] == chunk_lang):
+                            chunk_parts.extend(bridge_parts)
+                            chunk_parts.append(candidate[0][0])
+                            j = k + 1
+                            bridged = True
                             break
-                        if j + 1 < len(candidate_options):
-                            peek = candidate_options[j + 1]
-                            if (peek and isinstance(peek[0], tuple) and
-                                    len(peek[0]) == 3 and peek[0][2] is True and
-                                    peek[0][1] == chunk_lang):
-                                chunk_parts.append(next_slot[0])
-                                j += 1
-                                continue
+                        if (candidate and len(candidate) == 1 and
+                                isinstance(candidate[0], str)):
+                            if candidate[0].startswith("<") and candidate[0].endswith(">") and "_" in candidate[0]:
+                                break
+                            bridge_parts.append(candidate[0])
+                            k += 1
+                            continue
+                        break
+                    if bridged:
+                        continue
                     break
 
                 full_chunk = "".join(chunk_parts)
@@ -527,7 +559,7 @@ class EmotionPreservingCorrector:
                     
                     # 2. Phrase normalization
                     try:
-                        from ai.preprocessing.emotion_phrase_normalizer import normalize_emotion_phrases
+                        from ai.text.tanglish.phrase import normalize_emotion_phrases
                         chunk_phrase = normalize_emotion_phrases(full_chunk)
                     except Exception as e:
                         logger.error(f"Phrase normalization failed: {e}")
@@ -535,7 +567,7 @@ class EmotionPreservingCorrector:
                     
                     # 3. Canonical Normalization
                     try:
-                        from ai.preprocessing.tanglish_canonical import normalize_canonical_tanglish_sentence
+                        from ai.text.tanglish.canonical import normalize_canonical_tanglish_sentence
                         chunk_canonical = normalize_canonical_tanglish_sentence(chunk_phrase)
                     except Exception as e:
                         logger.error(f"Canonical normalization failed: {e}")
@@ -543,7 +575,7 @@ class EmotionPreservingCorrector:
                         
                     # 4. IndicXlit
                     try:
-                        from ai.transliteration.tanglish_to_tamil import TanglishToTamil
+                        from ai.text.tanglish.transliteration import TanglishToTamil
                         chunk_indic = TanglishToTamil.get_instance().transliterate_sentence(chunk_canonical)
                     except Exception as e:
                         logger.error(f"Failed to transliterate: {e}")
@@ -579,10 +611,32 @@ class EmotionPreservingCorrector:
                     merged_options_canonical.append([chunk_canonical])
                     merged_options_indic.append([chunk_final])
                 else:
+                    # Native-script Indic chunk (Tamil/Hindi/Telugu/...):
+                    # translate it right here, per-chunk, instead of
+                    # deferring to the single whole-sentence translation
+                    # check at the end of TextNormalizer.normalize(). That
+                    # whole-sentence check only fires when langdetect calls
+                    # the ENTIRE text non-English -- for a mixed sentence
+                    # where English words happen to dominate numerically
+                    # (e.g. "Today I was very tired, <hindi words>"),
+                    # langdetect can call the whole thing English and skip
+                    # translation, silently leaving the native-script
+                    # portion untranslated. Translating each native chunk
+                    # independently avoids depending on that whole-sentence
+                    # guess.
+                    chunk_translated = full_chunk
+                    iso_code = _CHUNK_LANG_TO_ISO.get(chunk_lang)
+                    if iso_code:
+                        try:
+                            from ai.text.translation.router import translate_to_english
+                            chunk_translated = translate_to_english(full_chunk, iso_code)
+                        except Exception as e:
+                            logger.error(f"Native-chunk translation failed for {chunk_lang}: {e}")
+
                     merged_options_autocorrect.append([full_chunk])
                     merged_options_phrase.append([full_chunk])
                     merged_options_canonical.append([full_chunk])
-                    merged_options_indic.append([full_chunk])
+                    merged_options_indic.append([chunk_translated])
                     
                 i = j
             else:

@@ -254,7 +254,9 @@ def analyze_voice(audio_path, language=None, multilingual=False):
         "raw_transcript": "...",
         "word_by_word_gloss": ["...", ...],
         "contextual_translation": "...",
-        "acoustic_features": {...}
+        "acoustic_features": {...},
+        "words": [{"word": "...", "start": 0.0, "end": 0.4}, ...],
+        "duration_sec": 3.2
       }
 
     `language`: ISO code (e.g. "ta") to force, skipping Whisper's auto-detect.
@@ -292,6 +294,13 @@ def analyze_voice(audio_path, language=None, multilingual=False):
         "word_by_word_gloss": gloss,
         "contextual_translation": contextual,
         "acoustic_features": acoustic,
+        # Per-word (word, start_sec, end_sec) timing -- already computed
+        # internally by _transcribe_native, just not previously surfaced.
+        # Exposed here (purely additive, no existing field changed) so
+        # callers needing real transcript timing (e.g. video/voice
+        # timestamp synchronization) don't have to re-run Whisper.
+        "words": native["words"],
+        "duration_sec": round(duration, 3),
     }
 
 

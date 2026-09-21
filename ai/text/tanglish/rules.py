@@ -1,7 +1,7 @@
 import re
 from typing import List, Tuple
 
-from .lexical_constants import ZIPF_ENGLISH_THRESHOLD_STRICT, fuzzy_match_tanglish
+from ai.text.language.lexical_constants import ZIPF_ENGLISH_THRESHOLD_STRICT, fuzzy_match_tanglish
 
 # Minimal fallback dictionaries (only for unique idioms/phrases that cannot be translated word-by-word)
 PHRASE_REPLACEMENTS: List[Tuple[str, str]] = []
@@ -86,36 +86,48 @@ def reorder_sov_to_svo(text: str) -> str:
             middle = match_feel.group(1)
             stripped = f"I feel {middle}"
             
-        # 1b. No subject: [X] feel -> feel [X]
+        # 1b. Subject "I" appears mid-clause, not at the very start (e.g.
+        # "Ram told me I very difficult feel" -- an English reporting
+        # clause followed by a Tamil-order fragment). Reorder only from
+        # "I" onward and leave the preceding English clause untouched,
+        # rather than treating the whole string as one predicate and
+        # moving "feel" all the way to the front of it.
         else:
-            match_feel_no_sub = re.match(r"^(.+?)\s+feel$", stripped, re.IGNORECASE)
-            if match_feel_no_sub:
-                middle = match_feel_no_sub.group(1)
-                stripped = f"feel {middle}"
-                
-            # 2. Subject [X] do/doing -> Subject do [X] / Subject am doing [X]
+            match_feel_mid_subject = re.match(r"^(.*?)\bI\s+(.+?)\s+feel$", stripped, re.IGNORECASE)
+            if match_feel_mid_subject:
+                prefix, middle = match_feel_mid_subject.groups()
+                stripped = f"{prefix}I feel {middle}"
             else:
-                match_do = re.match(r"^I\s+(.+?)\s+do$", stripped, re.IGNORECASE)
-                if match_do:
-                    middle = match_do.group(1)
-                    if middle.lower().endswith("ing"):
-                        stripped = f"I am {middle}"
-                    else:
-                        stripped = f"I do {middle}"
-                        
-                # 3. Subject [X] cannot -> Subject cannot [X]
+                # No "I" anywhere in the clause: fall back to the
+                # original whole-clause, no-subject reorder.
+                match_feel_no_sub = re.match(r"^(.+?)\s+feel$", stripped, re.IGNORECASE)
+                if match_feel_no_sub:
+                    middle = match_feel_no_sub.group(1)
+                    stripped = f"feel {middle}"
+
+                # 2. Subject [X] do/doing -> Subject do [X] / Subject am doing [X]
                 else:
-                    match_cannot = re.match(r"^I\s+(.+?)\s+cannot$", stripped, re.IGNORECASE)
-                    if match_cannot:
-                        middle = match_cannot.group(1)
-                        stripped = f"I cannot {middle}"
-                        
-                    # 4. Subject [X] do not understand -> Subject do not understand [X]
+                    match_do = re.match(r"^I\s+(.+?)\s+do$", stripped, re.IGNORECASE)
+                    if match_do:
+                        middle = match_do.group(1)
+                        if middle.lower().endswith("ing"):
+                            stripped = f"I am {middle}"
+                        else:
+                            stripped = f"I do {middle}"
+
+                    # 3. Subject [X] cannot -> Subject cannot [X]
                     else:
-                        match_understand = re.match(r"^I\s+(.+?)\s+do not understand$", stripped, re.IGNORECASE)
-                        if match_understand:
-                            middle = match_understand.group(1)
-                            stripped = f"I do not understand {middle}"
+                        match_cannot = re.match(r"^I\s+(.+?)\s+cannot$", stripped, re.IGNORECASE)
+                        if match_cannot:
+                            middle = match_cannot.group(1)
+                            stripped = f"I cannot {middle}"
+
+                        # 4. Subject [X] do not understand -> Subject do not understand [X]
+                        else:
+                            match_understand = re.match(r"^I\s+(.+?)\s+do not understand$", stripped, re.IGNORECASE)
+                            if match_understand:
+                                middle = match_understand.group(1)
+                                stripped = f"I do not understand {middle}"
             
         reordered_clauses.append(clause.replace(clause.strip(), stripped))
         

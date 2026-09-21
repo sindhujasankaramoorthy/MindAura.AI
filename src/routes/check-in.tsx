@@ -2,6 +2,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { CameraIcon, CheckIcon, LeafIcon, MicIcon, NotebookIcon } from "../components/icons";
 import { addCheckIn, formatDuration, type CheckInType } from "../lib/store";
+import { submitTextCheckIn, submitVoiceCheckIn, submitVideoCheckIn } from "../lib/api";
 
 export const Route = createFileRoute("/check-in")({
   validateSearch: (search: Record<string, unknown>) => {
@@ -241,7 +242,14 @@ function WriteStep({ initial, onDone }: { initial: string; onDone: (text: string
         ))}
       </div>
 
-      <button type="button" onClick={() => onDone(value)} className="btn-primary mt-8 w-full">
+      <button
+        type="button"
+        onClick={() => {
+          submitTextCheckIn(value);
+          onDone(value);
+        }}
+        className="btn-primary mt-8 w-full"
+      >
         Save &amp; Continue
       </button>
     </section>
@@ -265,6 +273,9 @@ function VoiceStep({ onDone }: { onDone: (seconds: number) => void }) {
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const blobRef = useRef<Blob | null>(null);
 
   function cleanup() {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -282,6 +293,18 @@ function VoiceStep({ onDone }: { onDone: (seconds: number) => void }) {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
+
+      chunksRef.current = [];
+      const recorder = new MediaRecorder(stream);
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      recorder.onstop = () => {
+        blobRef.current = new Blob(chunksRef.current, { type: recorder.mimeType });
+      };
+      recorder.start();
+      recorderRef.current = recorder;
+
       const ctx = new AudioContext();
       ctxRef.current = ctx;
       const analyser = ctx.createAnalyser();
@@ -305,6 +328,9 @@ function VoiceStep({ onDone }: { onDone: (seconds: number) => void }) {
 
   function finish() {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    if (recorderRef.current && recorderRef.current.state !== "inactive") {
+      recorderRef.current.stop();
+    }
     cleanup();
     setPhase("saved");
   }
@@ -381,7 +407,14 @@ function VoiceStep({ onDone }: { onDone: (seconds: number) => void }) {
               >
                 Record Again
               </button>
-              <button type="button" className="btn-primary" onClick={() => onDone(seconds)}>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => {
+                  if (blobRef.current) submitVoiceCheckIn(blobRef.current);
+                  onDone(seconds);
+                }}
+              >
                 Continue
               </button>
             </div>
@@ -397,8 +430,14 @@ function VideoStep({ onDone }: { onDone: (seconds: number) => void }) {
   const [seconds, setSeconds] = useTimer(phase === "recording");
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const blobRef = useRef<Blob | null>(null);
 
   function stopStream() {
+    if (recorderRef.current && recorderRef.current.state !== "inactive") {
+      recorderRef.current.stop();
+    }
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
   }
@@ -411,6 +450,18 @@ function VideoStep({ onDone }: { onDone: (seconds: number) => void }) {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       streamRef.current = stream;
+
+      chunksRef.current = [];
+      const recorder = new MediaRecorder(stream);
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      recorder.onstop = () => {
+        blobRef.current = new Blob(chunksRef.current, { type: recorder.mimeType });
+      };
+      recorder.start();
+      recorderRef.current = recorder;
+
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play().catch(() => {});
@@ -484,7 +535,14 @@ function VideoStep({ onDone }: { onDone: (seconds: number) => void }) {
               >
                 Retake
               </button>
-              <button type="button" className="btn-primary" onClick={() => onDone(seconds)}>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => {
+                  if (blobRef.current) submitVideoCheckIn(blobRef.current);
+                  onDone(seconds);
+                }}
+              >
                 Continue
               </button>
             </>

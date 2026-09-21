@@ -12,7 +12,8 @@ from backend.app.database import (
     get_patient_by_id,
     create_patient,
     get_db_connection,
-    calculate_age
+    calculate_age,
+    get_patient_history
 )
 from backend.app.models import PatientCreate
 
@@ -81,6 +82,16 @@ def get_patient_consultations(patient_id: str):
         d["google_meet"] = json.loads(d.get("google_meet_json") or "{}")
         results.append(d)
     return results
+
+
+@router.get("/{patient_id}/history")
+def get_patient_ai_history(patient_id: str):
+    """Returns every modality's AI check-in history (text/voice/video) for
+    the doctor dashboard's timeline and trends view."""
+    patient = get_patient_by_id(patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    return get_patient_history(patient_id)
 
 
 @router.get("/{patient_id}/casesheets")

@@ -130,6 +130,51 @@ def init_db():
     );
     """)
 
+    # 6. Video Analyses table -- multimodal (face + voice) observation
+    # records, per the video-analysis pipeline (ai/video/pipeline.py).
+    # Stores the complete measurable-observation JSON, not just a summary,
+    # since downstream models will need the raw observations later.
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS video_analyses (
+        id TEXT PRIMARY KEY,
+        patient_id TEXT NOT NULL,
+        video_id TEXT NOT NULL,
+        analysis_id TEXT UNIQUE NOT NULL,
+        analysis_version TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        face_model TEXT,
+        voice_model TEXT,
+        observation_json TEXT NOT NULL,
+        FOREIGN KEY (patient_id) REFERENCES patients (id)
+    );
+    """)
+
+    # 7. Text Journals table -- structured output of ai/text/pipeline.py
+    # for each patient-submitted journal entry.
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS text_journals (
+        id TEXT PRIMARY KEY,
+        patient_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        raw_input TEXT NOT NULL,
+        analysis_json TEXT NOT NULL,
+        FOREIGN KEY (patient_id) REFERENCES patients (id)
+    );
+    """)
+
+    # 8. Voice Records table -- structured output of
+    # ai/video/existing_voice_adapter.py for each patient-submitted voice
+    # check-in (audio only, no video).
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS voice_records (
+        id TEXT PRIMARY KEY,
+        patient_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        analysis_json TEXT NOT NULL,
+        FOREIGN KEY (patient_id) REFERENCES patients (id)
+    );
+    """)
+
     conn.commit()
     seed_initial_data(conn)
     conn.close()
@@ -567,3 +612,159 @@ def create_patient(data: Dict[str, Any]) -> Dict[str, Any]:
     conn.commit()
     conn.close()
     return get_patient_by_id(new_id)
+
+
+# --- Video Analysis Helper Functions ---
+
+def save_video_analysis(patient_id: str, analysis_json: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Persists one video-analysis observation record (see
+    ai/video/pipeline.analyze_video()'s output) for a patient. Stores the
+    full observation JSON, not just a summary -- future models need the
+    raw measurable observations, not only a final interpretation.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    record_id = f"va-{analysis_json['analysis_id']}"
+    metadata = analysis_json.get("analysis_metadata", {})
+
+    cursor.execute("""
+    INSERT INTO video_analyses (
+        id, patient_id, video_id, analysis_id, analysis_version,
+        created_at, face_model, voice_model, observation_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        record_id,
+        patient_id,
+        analysis_json["video_id"],
+        analysis_json["analysis_id"],
+        analysis_json["analysis_version"],
+        analysis_json["created_at"],
+        metadata.get("face_model"),
+        metadata.get("voice_model"),
+        json.dumps(analysis_json),
+    ))
+    conn.commit()
+    conn.close()
+    return get_video_analysis(analysis_json["analysis_id"])
+
+
+def get_video_analysis(analysis_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM video_analyses WHERE analysis_id = ?", (analysis_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    d = dict(row)
+    d["observation"] = json.loads(d.pop("observation_json"))
+    return d
+
+
+def get_video_analyses_for_patient(patient_id: str) -> List[Dict[str, Any]]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM video_analyses WHERE patient_id = ? ORDER BY created_at DESC",
+        (patient_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["observation"] = json.loads(d.pop("observation_json"))
+        result.append(d)
+    return result
+
+
+# --- Text Journal Helper Functions ---
+
+def save_text_journal(patient_id: str, raw_input: str, analysis_json: Dict[str, Any]) -> Dict[str, Any]:
+    """Persists one text check-in's structured output from
+    ai/text/pipeline.process_text()."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    now = datetime.now().isoformat()
+    record_id = f"tj-{int(datetime.now().timestamp() * 1000)}"
+
+    cursor.execute("""
+    INSERT INTO text_journals (id, patient_id, created_at, raw_input, analysis_json)
+    VALUES (?, ?, ?, ?, ?)
+    """, (record_id, patient_id, now, raw_input, json.dumps(analysis_json)))
+    conn.commit()
+    conn.close()
+    return get_text_journals_for_patient(patient_id)[0]
+
+
+def get_text_journals_for_patient(patient_id: str) -> List[Dict[str, Any]]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM text_journals WHERE patient_id = ? ORDER BY created_at DESC",
+        (patient_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["analysis"] = json.loads(d.pop("analysis_json"))
+        result.append(d)
+    return result
+
+
+# --- Voice Record Helper Functions ---
+
+def save_voice_record(patient_id: str, analysis_json: Dict[str, Any]) -> Dict[str, Any]:
+    """Persists one voice check-in's structured output from
+    ai/video/existing_voice_adapter.analyze_audio()."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    now = datetime.now().isoformat()
+    record_id = f"vr-{int(datetime.now().timestamp() * 1000)}"
+
+    cursor.execute("""
+    INSERT INTO voice_records (id, patient_id, created_at, analysis_json)
+    VALUES (?, ?, ?, ?)
+    """, (record_id, patient_id, now, json.dumps(analysis_json)))
+    conn.commit()
+    conn.close()
+    return get_voice_records_for_patient(patient_id)[0]
+
+
+def get_voice_records_for_patient(patient_id: str) -> List[Dict[str, Any]]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM voice_records WHERE patient_id = ? ORDER BY created_at DESC",
+        (patient_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["analysis"] = json.loads(d.pop("analysis_json"))
+        result.append(d)
+    return result
+
+
+# --- Combined Multimodal History ---
+
+def get_patient_history(patient_id: str) -> Dict[str, Any]:
+    """Returns every modality's check-in history for a patient, for the
+    doctor dashboard's timeline/trends view."""
+    return {
+        "patient_id": patient_id,
+        "text_journals": get_text_journals_for_patient(patient_id),
+        "voice_records": get_voice_records_for_patient(patient_id),
+        "video_analyses": get_video_analyses_for_patient(patient_id),
+    }

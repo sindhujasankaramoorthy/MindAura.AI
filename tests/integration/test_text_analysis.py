@@ -1,18 +1,34 @@
 """
-Focused integration coverage for the Text Module's public interface
-(ai/inference/text_analysis.analyze_text). Verifies pipeline wiring and the
-JSON contract's shape/stability -- not exact emotion-label correctness,
-which is a separate accuracy-benchmark concern.
+Focused integration coverage for the (now archived) RoBERTa-based text
+analyzer's public interface, analyze_text() -- moved to
+temporary/models/roberta/text_analysis.py during the text-pipeline
+restructuring (it's not part of the active ai/text/ pipeline, which does
+not do emotion classification -- see ai/text/pipeline.py instead for the
+active, currently-supported text entry point).
 
-Uses real models (RoBERTa GoEmotions, NLLB, NER, SymSpell) the same way
-tests/integration/test_text_normalizer_pipeline.py does. Marked slow.
+Kept here as coverage for the archived module in case it's reconnected in
+a future phase; skipped entirely if it can't be imported.
 """
+import os
+import sys
+
 import pytest
 
 pytest.importorskip("torch")
 pytest.importorskip("transformers")
 
-from ai.inference.text_analysis import analyze_text
+_ARCHIVED_ROBERTA_DIR = os.path.join(
+    os.path.dirname(__file__), "..", "..", "temporary", "models", "roberta"
+)
+sys.path.insert(0, _ARCHIVED_ROBERTA_DIR)
+
+try:
+    from text_analysis import analyze_text
+except ImportError:
+    pytest.skip(
+        "Archived text_analysis module (temporary/models/roberta/) not importable.",
+        allow_module_level=True,
+    )
 
 pytestmark = pytest.mark.slow
 

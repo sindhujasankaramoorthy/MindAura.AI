@@ -187,8 +187,8 @@ class NERProtection:
             "enaku", "unaku", "rendu", "perum", "kastama", "mudila", "pidikula"
         }
         try:
-            from .advanced_correction import PROTECTED_WORDS, NEGATION_RECOVERY_MAP, CUSTOM_OVERRIDES
-            from .tanglish_patterns import WORD_REPLACEMENTS
+            from ai.text.normalization.correction import PROTECTED_WORDS, NEGATION_RECOVERY_MAP, CUSTOM_OVERRIDES
+            from ai.text.tanglish.rules import WORD_REPLACEMENTS
             _reject = (
                 {w.lower() for w in PROTECTED_WORDS}
                 | {k.lower() for k in NEGATION_RECOVERY_MAP}

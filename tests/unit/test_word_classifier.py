@@ -1,4 +1,4 @@
-from ai.preprocessing.word_classifier import WordClassifier
+from ai.text.language.word_classifier import WordClassifier
 
 
 def test_english_word_classified_as_english():

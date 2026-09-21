@@ -1,4 +1,4 @@
-from ai.preprocessing.language_boundary import classify_sentence_language, classify_token_language
+from ai.text.language.boundary import classify_sentence_language, classify_token_language
 
 
 def test_classify_sentence_language_english():

@@ -55,6 +55,10 @@ lerna-debug.log*
 models/
 checkpoints/
 
+# Facial-analysis datasets (CK+/DFEW/FERV39k) -- license-gated, not
+# redistributable, never committed. See ai/face/train_temporal_model.py.
+ai/face/data/
+
 # ========================
 # Hugging Face Cache
 # ========================

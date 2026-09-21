@@ -1,12 +1,24 @@
 """
-Thin service layer wrapping ai.inference.emotion_predict.EmotionAnalyzer so
-the FastAPI layer doesn't need to know about the ai/ package's internals.
+Thin service layer wrapping EmotionAnalyzer so the FastAPI layer doesn't
+need to know about the ai/ package's internals.
+
+NOTE: EmotionAnalyzer/QwenReasoning were moved to temporary/models/ during
+the text-pipeline restructuring (they're not part of the active
+ai/text/ pipeline, which stops at JSON — see ai/text/pipeline.py). This
+service module itself is not currently wired into an active route; it's
+kept working (import path updated) since it's the only caller, but the
+emotion-analysis feature it exposes is not part of the active pipeline
+until RoBERTa/Qwen are reconnected in a future task.
 """
 import logging
+import sys
+from pathlib import Path
 from typing import Any, Dict
 
-from ai.inference.emotion_predict import EmotionAnalyzer
-from ai.inference.qwen_reasoning import QwenReasoning
+sys.path.append(str(Path(__file__).resolve().parents[3] / "temporary" / "models" / "roberta"))
+sys.path.append(str(Path(__file__).resolve().parents[3] / "temporary" / "models" / "qwen"))
+from emotion_predict import EmotionAnalyzer
+from qwen_reasoning import QwenReasoning
 
 logger = logging.getLogger(__name__)
 

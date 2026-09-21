@@ -3,8 +3,8 @@ Ported from the old root-level test_tanglish_debug.py manual script.
 Only needs pandas/rapidfuzz (via ai.tanglish_model.src), no torch — belongs
 in the fast tier.
 """
-from ai.tanglish_model.src.vocabulary import load_vocabulary, create_word_set
-from ai.tanglish_model.src.autocorrect import correct_word
+from ai.text.tanglish.model.src.vocabulary import load_vocabulary, create_word_set
+from ai.text.tanglish.model.src.autocorrect import correct_word
 
 KNOWN_TANGLISH_WORDS = [
     "enaku", "romba", "kastama", "iruku", "pudikula", "mudiyala", "theriyum",

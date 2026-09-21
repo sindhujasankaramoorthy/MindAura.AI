@@ -19,7 +19,7 @@ pytest.importorskip("torch")
 pytest.importorskip("transformers")
 pytest.importorskip("symspellpy")
 
-from ai.preprocessing.text_normalizer import TextNormalizer
+from ai.text.pipeline import TextNormalizer
 
 pytestmark = pytest.mark.slow
 

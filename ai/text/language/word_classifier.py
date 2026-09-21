@@ -14,6 +14,7 @@ import logging
 from wordfreq import zipf_frequency as z
 
 from .lexical_constants import ZIPF_ENGLISH_THRESHOLD_LOOSE, fuzzy_match_tanglish
+from .script_detector import detect_script
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ class WordClassifier:
         self.tanglish_words = set()
         
         try:
-            from ai.tanglish_model.src.vocabulary import load_vocabulary, create_word_set
+            from ai.text.tanglish.model.src.vocabulary import load_vocabulary, create_word_set
             df = load_vocabulary()
             self.tanglish_words = create_word_set(df)
         except Exception as e:
@@ -36,7 +37,7 @@ class WordClassifier:
         try:
             import fasttext
 
-            # Fixed, project-relative location (ai/preprocessing/models/) so
+            # Fixed, project-relative location (ai/text/language/models/) so
             # this works regardless of the caller's current working
             # directory -- not a personal/absolute path. This mirrors the
             # existing models/ convention used elsewhere in the repo (e.g.
@@ -49,8 +50,8 @@ class WordClassifier:
                 raise FileNotFoundError(
                     f"fastText language-id model not found at {model_path}. "
                     "Download it with:\n"
-                    "  mkdir -p ai/preprocessing/models && "
-                    "curl -L -o ai/preprocessing/models/lid.176.bin "
+                    "  mkdir -p ai/text/language/models && "
+                    "curl -L -o ai/text/language/models/lid.176.bin "
                     "https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.bin\n"
                     "Falling back to zipf-frequency + Tanglish-vocabulary "
                     "classification only (no fastText language ID)."
@@ -66,6 +67,17 @@ class WordClassifier:
             'pa': 'PUNJABI', 'ur': 'URDU'
         }
 
+        # Unicode-script -> language, as a deterministic, always-available
+        # fallback for native-script Indic words. Doesn't depend on
+        # fastText (which requires a ~130MB model file this environment
+        # doesn't reliably have) -- script identity for e.g. Devanagari or
+        # Telugu characters is unambiguous regardless of model availability.
+        self._script_to_lang = {
+            "Tamil": "TAMIL", "Devanagari": "HINDI", "Telugu": "TELUGU",
+            "Malayalam": "MALAYALAM", "Kannada": "KANNADA", "Bengali": "BENGALI",
+            "Gujarati": "GUJARATI", "Gurmukhi": "PUNJABI", "Arabic": "URDU",
+        }
+
     def is_eng(self,word):
         return z(word.lower(),"en") > ZIPF_ENGLISH_THRESHOLD_LOOSE
 
@@ -74,9 +86,13 @@ class WordClassifier:
         if w_lower in self.tanglish_words:
             return "TANGLISH"
 
-        if self.is_eng(word):#to check if english 
+        if self.is_eng(word):#to check if english
             return "ENGLISH"
-            
+
+        script = detect_script(word)
+        if script in self._script_to_lang:
+            return self._script_to_lang[script]
+
         if self.ft_model is not None:
             # FastText expects single line string without newlines
             safe_word = word.replace('\n', ' ').strip()

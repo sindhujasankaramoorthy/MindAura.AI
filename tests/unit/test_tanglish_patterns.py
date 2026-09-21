@@ -1,4 +1,4 @@
-from ai.preprocessing.tanglish_patterns import normalize_tanglish_semantics, reorder_sov_to_svo
+from ai.text.tanglish.rules import normalize_tanglish_semantics, reorder_sov_to_svo
 
 
 def test_normalize_tanglish_semantics_translates_core_words():
