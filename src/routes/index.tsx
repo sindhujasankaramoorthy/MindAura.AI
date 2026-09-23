@@ -1,8 +1,10 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { CameraIcon, CheckIcon, LeafIcon, MicIcon, NotebookIcon, SparkIcon } from "../components/icons";
 import { useStore } from "../lib/store";
+import { requireAuth } from "../lib/auth";
 
 export const Route = createFileRoute("/")({
+  beforeLoad: requireAuth,
   head: () => ({
     meta: [
       { title: "MindAura AI — Take a moment for yourself" },

@@ -2,3 +2,6 @@ fastapi
 uvicorn[standard]
 pydantic
 python-multipart
+sqlalchemy>=2.0
+psycopg2-binary
+pgvector

@@ -1,26 +1,57 @@
 """
-Tests for the video_analyses database table/helpers added to
+Tests for the video_analyses database table/helpers in
 backend/app/database.py, and validates that ai.video.pipeline's output
 JSON shape matches what the database layer expects (section 12/13/14 of
 the video-pipeline spec).
+
+Runs against a dedicated Postgres test database (TEST_DATABASE_URL env
+var, defaulting to a local `mindaura_test` database) rather than the dev
+database, so tests never depend on or leave residue in real data. Each
+test gets clean tables via drop_all/create_all.
 """
 import os
-import sqlite3
 import uuid
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from backend.app import database as db
+from backend.app.db import Base
+from backend.app.db_models import Patient
+
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql+psycopg2://mindaura:mindaura_dev_pw@127.0.0.1:5432/mindaura_test",
+)
 
 
 @pytest.fixture
-def temp_db(tmp_path, monkeypatch):
-    """Points the database module at a throwaway sqlite file for this test,
-    so tests never touch the real dev database."""
-    test_db_path = str(tmp_path / "test_video_analyses.db")
-    monkeypatch.setattr(db, "DB_PATH", test_db_path)
-    db.init_db()
-    yield test_db_path
+def temp_db(monkeypatch):
+    """Points the database module at a dedicated, freshly-reset test
+    database for the duration of the test."""
+    test_engine = create_engine(TEST_DATABASE_URL, future=True)
+    tables = [t for t in Base.metadata.sorted_tables if t.name != "embeddings"]
+    Base.metadata.drop_all(bind=test_engine, tables=tables)
+    Base.metadata.create_all(bind=test_engine, tables=tables)
+
+    TestSessionLocal = sessionmaker(bind=test_engine, autoflush=False, autocommit=False, future=True)
+    monkeypatch.setattr(db, "SessionLocal", TestSessionLocal)
+
+    # video_analyses.patient_id has a foreign key to patients -- seed the
+    # three patient ids these tests use.
+    with TestSessionLocal() as session:
+        now = "2026-09-17T00:00:00Z"
+        for pid in ("pat-1", "pat-2", "pat-3"):
+            session.add(Patient(
+                id=pid, mrn=f"TEST-{pid}", first_name="Test", last_name="Patient",
+                date_of_birth="2000-01-01", age=26, gender="Unspecified", phone="0000000000",
+                known_allergies=[], chronic_conditions=[], created_at=now, updated_at=now,
+            ))
+        session.commit()
+
+    yield test_engine
+    test_engine.dispose()
 
 
 def _sample_analysis(analysis_id=None, video_id="vid-1"):

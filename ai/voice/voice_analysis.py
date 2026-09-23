@@ -21,11 +21,20 @@ import librosa
 
 try:
     from ai.voice.voice_features import extract_voice_features
+    from ai.voice.name_protection import protect_names
 except ImportError:
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     if project_root not in sys.path:
         sys.path.append(project_root)
     from ai.voice.voice_features import extract_voice_features
+    from ai.voice.name_protection import protect_names
+
+# Faster-Whisper model size. "small" hallucinates badly on Tamil (verified
+# against a real recording, see docs/voice_pipeline_notes.md) -- "medium"
+# is the smallest step up with meaningfully better low-resource-language
+# support. Overridable via env var so it can be tuned per-deployment
+# without a code change.
+WHISPER_MODEL_SIZE = os.environ.get("MINDAURA_WHISPER_MODEL", "medium")
 
 # Short (Whisper) language code -> FLORES-200 code (NLLB's language space).
 # Mirrors ai/inference/emotion_predict.py's NLLB_LANG_CODES, plus "ur" which
@@ -90,12 +99,12 @@ _nllb_device = None
 
 
 def _load_model():
-    """Faster-Whisper ("small", CPU, int8) — loaded once, cached here."""
+    """Faster-Whisper (WHISPER_MODEL_SIZE, CPU, int8) — loaded once, cached here."""
     global _model
     if _model is None:
         from faster_whisper import WhisperModel
 
-        _model = WhisperModel("small", device="cpu", compute_type="int8")
+        _model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
     return _model
 
 
@@ -137,6 +146,18 @@ def _translate_text_to_english(text, lang_code):
     return tokenizer.batch_decode(tokens, skip_special_tokens=True)[0].strip()
 
 
+def _avg_logprob_to_confidence(logprobs):
+    """exp() of the mean segment avg_logprob -- a real signal straight from
+    the model's own decoding, not an invented heuristic. Whisper doesn't
+    expose a single first-class "confidence" score, so this is the
+    closest honest proxy available."""
+    import math
+
+    if not logprobs:
+        return None
+    return round(math.exp(sum(logprobs) / len(logprobs)), 2)
+
+
 def _transcribe_native(audio_path, language=None, multilingual=False):
     """
     Transcribe in the spoken language, with word-level timestamps.
@@ -163,12 +184,20 @@ def _transcribe_native(audio_path, language=None, multilingual=False):
         word_timestamps=True,
         language=language,
         multilingual=multilingual,
+        # Built-in Silero VAD (already bundled with faster-whisper, no new
+        # dependency) -- skips non-speech stretches instead of feeding them
+        # to the decoder, which otherwise sometimes hallucinates words for
+        # silence/background noise.
+        vad_filter=True,
     )
 
     words = []
     text_parts = []
+    logprobs = []
     for segment in segments:
         text_parts.append(segment.text.strip())
+        if segment.avg_logprob is not None:
+            logprobs.append(segment.avg_logprob)
         for w in (segment.words or []):
             word_text = w.word.strip()
             words.append({
@@ -182,9 +211,15 @@ def _transcribe_native(audio_path, language=None, multilingual=False):
 
     return {
         "language": language or info.language,
+        "language_probability": getattr(info, "language_probability", None),
         "languages_detected": languages_detected,
         "raw_transcript": " ".join(p for p in text_parts if p).strip(),
         "words": words,
+        # Real signal from the model, not fabricated: average of each
+        # segment's own avg_logprob, converted from log-space to a
+        # (0, 1] confidence-like value. None if there were no segments
+        # (e.g. silence/no speech detected).
+        "transcription_confidence": _avg_logprob_to_confidence(logprobs),
     }
 
 
@@ -197,9 +232,13 @@ def _translate_contextual(audio_path, language=None, multilingual=False):
     """
     model = _load_model()
     segments, _ = model.transcribe(
-        audio_path, beam_size=5, task="translate", language=language, multilingual=multilingual
+        audio_path, beam_size=5, task="translate", language=language, multilingual=multilingual,
+        vad_filter=True,
     )
-    return " ".join(seg.text.strip() for seg in segments).strip()
+    segments = list(segments)
+    text = " ".join(seg.text.strip() for seg in segments).strip()
+    confidence = _avg_logprob_to_confidence([s.avg_logprob for s in segments if s.avg_logprob is not None])
+    return text, confidence
 
 
 def _word_by_word_gloss(words):
@@ -231,6 +270,26 @@ def _word_by_word_gloss(words):
     return gloss
 
 
+def _build_language_profile(primary, language_probability, languages_detected):
+    """
+    Reshapes real detection signal already computed elsewhere -- Whisper's
+    own per-file language_probability, plus the script-based per-word tags
+    from _transcribe_native -- into the requested primary/secondary/
+    code_switched schema. Nothing here is invented: code_switched is
+    exactly "more than one script/language actually found in the words",
+    and confidence is exactly what Whisper itself reported (None if it
+    wasn't computed, e.g. when `language` was forced and detection was
+    skipped, rather than a fabricated 1.0).
+    """
+    secondary = [l for l in languages_detected if l != primary]
+    return {
+        "primary": primary,
+        "secondary": secondary,
+        "code_switched": len(languages_detected) > 1,
+        "confidence": round(language_probability, 2) if language_probability is not None else None,
+    }
+
+
 def _acoustic_features(audio_path, word_count, duration):
     raw = extract_voice_features(audio_path)
     speaking_rate = (
@@ -249,15 +308,33 @@ def analyze_voice(audio_path, language=None, multilingual=False):
     """
     Runs both analyses and returns one dict:
       {
+        # Existing fields (unchanged shape):
         "language_detected": "ur",
         "languages_detected": ["ur"],
-        "raw_transcript": "...",
+        "raw_transcript": "...",              # native-script, untranslated
         "word_by_word_gloss": ["...", ...],
-        "contextual_translation": "...",
+        "contextual_translation": "...",      # English, with Indian names protected
         "acoustic_features": {...},
         "words": [{"word": "...", "start": 0.0, "end": 0.4}, ...],
-        "duration_sec": 3.2
+        "duration_sec": 3.2,
+
+        # Added fields:
+        "normalized_transcription": "...",    # raw_transcript with Indian names corrected
+        "english_contextual_text": "...",     # same value as contextual_translation
+        "language": {
+          "primary": "ur", "secondary": [], "code_switched": False, "confidence": 0.93,
+        },
+        "entities": [
+          {"original": "...", "entity_type": "PERSON", "normalized": "...",
+           "confidence": 0.94, "correction_applied": True},
+          ...
+        ],
+        "confidence": {"language": 0.93, "transcription": 0.87, "translation": 0.85},
       }
+
+    See docs/voice_pipeline_notes.md for the reasoning behind these
+    additions (Indian-name protection, Tamil-accuracy fix) and their known
+    limitations.
 
     `language`: ISO code (e.g. "ta") to force, skipping Whisper's auto-detect.
     Use this when the WHOLE clip is one known language — e.g. every clip from
@@ -282,25 +359,62 @@ def analyze_voice(audio_path, language=None, multilingual=False):
         # hallucinated content that was never said), so just pass the native
         # words straight through.
         contextual = native["raw_transcript"]
+        translation_confidence = native["transcription_confidence"]
         gloss = [w["word"] for w in native["words"]]
     else:
-        contextual = _translate_contextual(audio_path, language=language, multilingual=multilingual)
+        contextual, translation_confidence = _translate_contextual(
+            audio_path, language=language, multilingual=multilingual
+        )
         gloss = _word_by_word_gloss(native["words"])
 
+    # Indian-name protection -- a dedicated stage (ai/voice/name_protection.py),
+    # deliberately run on BOTH the native transcript and the English text
+    # independently, since Whisper's translate task decodes straight from
+    # audio in its own pass rather than consuming our corrected transcript;
+    # protecting only one side would leave the other's name errors as-is.
+    # Only Latin-script name mentions are checked against the Indian-name
+    # dictionary (native-script name correction is out of scope here -- see
+    # docs/voice_pipeline_notes.md for why).
+    native_protection = protect_names(native["raw_transcript"])
+    contextual_protection = protect_names(contextual)
+    normalized_transcription = native_protection["corrected_text"]
+    english_contextual_text = contextual_protection["corrected_text"]
+
+    entities = native_protection["entities"] + [
+        e for e in contextual_protection["entities"]
+        if e["original"] not in {ne["original"] for ne in native_protection["entities"]}
+    ]
+
+    language_profile = _build_language_profile(
+        native["language"], native.get("language_probability"), native["languages_detected"]
+    )
+
     return {
+        # --- Existing fields, unchanged shape (backward compatible with
+        # ai/video/existing_voice_adapter.py and existing tests) ---
         "language_detected": native["language"],
         "languages_detected": native["languages_detected"],
         "raw_transcript": native["raw_transcript"],
         "word_by_word_gloss": gloss,
-        "contextual_translation": contextual,
+        "contextual_translation": english_contextual_text,
         "acoustic_features": acoustic,
-        # Per-word (word, start_sec, end_sec) timing -- already computed
-        # internally by _transcribe_native, just not previously surfaced.
-        # Exposed here (purely additive, no existing field changed) so
-        # callers needing real transcript timing (e.g. video/voice
-        # timestamp synchronization) don't have to re-run Whisper.
         "words": native["words"],
         "duration_sec": round(duration, 3),
+
+        # --- New fields: the three preserved versions, structured language
+        # detection, and Indian-name protection ---
+        "normalized_transcription": normalized_transcription,
+        "english_contextual_text": english_contextual_text,
+        "language": language_profile,
+        "entities": entities,
+        "confidence": {
+            "language": language_profile["confidence"],
+            # exp(mean segment avg_logprob) from the model's own decoding
+            # -- a real proxy signal, since faster-whisper doesn't expose
+            # a first-class confidence score directly.
+            "transcription": native["transcription_confidence"],
+            "translation": translation_confidence,
+        },
     }
 
 

@@ -32,13 +32,22 @@ def analyze_audio(audio_path: str, language: Optional[str] = None, multilingual:
         "status": "ok" | "error",
         "transcription": {
           "raw_text": str,               # native-script, untranslated
+          "normalized_text": str,        # raw_text with high-confidence Indian-name corrections applied
           "segments": [...],             # word-level timing (available)
           "language_detected": str,
           "languages_detected": [str],
+          "language": {...},             # primary/secondary/code_switched/confidence
         },
+        "entities": [...],               # PERSON entities found, with Indian-name correction info
         "acoustics": { ... },            # only fields the model actually computes
+        "confidence": {...},             # real per-stage confidence where the model exposes one
         "duration_sec": float,
       }
+
+    Translation to English is deliberately left out of this adapter's
+    output -- raw_text/normalized_text stay native-script, since English
+    translation is the job of ai/text/pipeline.py downstream, not this
+    voice-specific stage (see module docstring).
     """
     try:
         result = analyze_voice(audio_path, language=language, multilingual=multilingual)
@@ -49,11 +58,15 @@ def analyze_audio(audio_path: str, language: Optional[str] = None, multilingual:
             "error": str(e),
             "transcription": {
                 "raw_text": NOT_AVAILABLE,
+                "normalized_text": NOT_AVAILABLE,
                 "segments": [],
                 "language_detected": NOT_AVAILABLE,
                 "languages_detected": [],
+                "language": NOT_AVAILABLE,
             },
+            "entities": [],
             "acoustics": _empty_acoustics(),
+            "confidence": {"language": NOT_AVAILABLE, "transcription": NOT_AVAILABLE},
             "duration_sec": NOT_AVAILABLE,
         }
 
@@ -64,16 +77,27 @@ def analyze_audio(audio_path: str, language: Optional[str] = None, multilingual:
     ]
 
     acoustic = result.get("acoustic_features", {})
+    confidence = result.get("confidence", {})
 
     return {
         "status": "ok",
         "transcription": {
             "raw_text": result.get("raw_transcript", NOT_AVAILABLE),
+            "normalized_text": result.get("normalized_transcription", NOT_AVAILABLE),
             "segments": segments,
             "language_detected": result.get("language_detected", NOT_AVAILABLE),
             "languages_detected": result.get("languages_detected", []),
+            "language": result.get("language", NOT_AVAILABLE),
         },
+        # PERSON entities from the transcript, with Indian-name protection's
+        # correction info (see ai/voice/name_protection.py). Never a fake
+        # emotion/diagnosis field -- just what was said and who it's about.
+        "entities": result.get("entities", []),
         "acoustics": _map_acoustics(acoustic),
+        "confidence": {
+            "language": confidence.get("language", NOT_AVAILABLE),
+            "transcription": confidence.get("transcription", NOT_AVAILABLE),
+        },
         "duration_sec": result.get("duration_sec", NOT_AVAILABLE),
     }
 

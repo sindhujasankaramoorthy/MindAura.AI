@@ -2,8 +2,10 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { CameraIcon, LeafIcon, MicIcon, NotebookIcon } from "../components/icons";
 import { dayLabel, formatDuration, useStore, type CheckIn } from "../lib/store";
+import { requireAuth } from "../lib/auth";
 
 export const Route = createFileRoute("/check-ins")({
+  beforeLoad: requireAuth,
   head: () => ({
     meta: [
       { title: "My Check-ins — MindAura AI" },

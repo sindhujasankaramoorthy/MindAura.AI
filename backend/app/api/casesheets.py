@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Body, Response
 from fastapi.responses import HTMLResponse
+from sqlalchemy import text
 from backend.app.database import (
     get_db_connection,
     get_patient_by_id
@@ -27,37 +28,36 @@ router = APIRouter(prefix="/api/casesheets", tags=["casesheets"])
 def get_case_sheet_by_consultation(consultation_id: str):
     """Retrieves the 17-section case sheet associated with a consultation."""
     conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-    SELECT cs.*,
-           p.first_name || ' ' || p.last_name as patient_name,
-           p.mrn as patient_mrn,
-           p.date_of_birth,
-           p.age as patient_age,
-           p.gender as patient_gender,
-           p.blood_group as patient_blood_group,
-           p.phone as patient_phone,
-           u.name as doctor_name,
-           u.registration_number as doctor_registration,
-           u.specialization as doctor_specialization,
-           s.name as student_name
-    FROM casesheets cs
-    JOIN patients p ON cs.patient_id = p.id
-    JOIN users u ON cs.doctor_id = u.id
-    LEFT JOIN users s ON cs.student_id = s.id
-    WHERE cs.consultation_id = ?
-    """, (consultation_id,))
-    row = cursor.fetchone()
-    conn.close()
+    try:
+        row = conn.execute(text("""
+        SELECT cs.*,
+               p.first_name || ' ' || p.last_name as patient_name,
+               p.mrn as patient_mrn,
+               p.date_of_birth,
+               p.age as patient_age,
+               p.gender as patient_gender,
+               p.blood_group as patient_blood_group,
+               p.phone as patient_phone,
+               u.name as doctor_name,
+               u.registration_number as doctor_registration,
+               u.specialization as doctor_specialization,
+               s.name as student_name
+        FROM casesheets cs
+        JOIN patients p ON cs.patient_id = p.id
+        JOIN users u ON cs.doctor_id = u.id
+        LEFT JOIN users s ON cs.student_id = s.id
+        WHERE cs.consultation_id = :consultation_id
+        """), {"consultation_id": consultation_id}).mappings().first()
+    finally:
+        conn.close()
 
     if not row:
         raise HTTPException(status_code=404, detail="No case sheet found for this consultation.")
 
     d = dict(row)
-    d["sections"] = json.loads(d.get("sections_json") or "{}")
-    d["multilingual_summary"] = json.loads(d.get("multilingual_summary_json") or "{}")
-    d["approval"] = json.loads(d.get("approval_json") or "{}")
+    d["sections"] = d.get("sections") or {}
+    d["multilingual_summary"] = d.get("multilingual_summary") or {}
+    d["approval"] = d.get("approval") or {}
     return d
 
 
@@ -68,11 +68,11 @@ def generate_ai_case_sheet(consultation_id: str):
     consultation transcripts using Gemini AI (or offline Clinical NLP fallback).
     """
     conn = get_db_connection()
-    cursor = conn.cursor()
 
     # 1. Fetch consultation metadata
-    cursor.execute("SELECT * FROM consultations WHERE id = ?", (consultation_id,))
-    consult_row = cursor.fetchone()
+    consult_row = conn.execute(
+        text("SELECT * FROM consultations WHERE id = :id"), {"id": consultation_id}
+    ).mappings().first()
     if not consult_row:
         conn.close()
         raise HTTPException(status_code=404, detail="Consultation not found.")
@@ -81,23 +81,24 @@ def generate_ai_case_sheet(consultation_id: str):
 
     # 2. Fetch patient and doctor details
     patient = get_patient_by_id(consultation["patient_id"])
-    cursor.execute("SELECT * FROM users WHERE id = ?", (consultation["doctor_id"],))
-    doctor = dict(cursor.fetchone())
+    doctor = dict(conn.execute(
+        text("SELECT * FROM users WHERE id = :id"), {"id": consultation["doctor_id"]}
+    ).mappings().first())
 
     student = None
     if consultation.get("student_id"):
-        cursor.execute("SELECT * FROM users WHERE id = ?", (consultation["student_id"],))
-        st_row = cursor.fetchone()
+        st_row = conn.execute(
+            text("SELECT * FROM users WHERE id = :id"), {"id": consultation["student_id"]}
+        ).mappings().first()
         if st_row:
             student = dict(st_row)
 
     # 3. Fetch transcript turns
-    cursor.execute("""
+    turns = [dict(t) for t in conn.execute(text("""
     SELECT * FROM transcripts
-    WHERE consultation_id = ?
+    WHERE consultation_id = :id
     ORDER BY turn_order ASC
-    """, (consultation_id,))
-    turns = [dict(t) for t in cursor.fetchall()]
+    """), {"id": consultation_id}).mappings().all()]
 
     if not turns:
         conn.close()
@@ -116,48 +117,56 @@ def generate_ai_case_sheet(consultation_id: str):
     cs_id = f"cs-{consultation_id}"
 
     # 5. Check if case sheet already exists for this consultation
-    cursor.execute("SELECT id, status FROM casesheets WHERE consultation_id = ?", (consultation_id,))
-    existing = cursor.fetchone()
+    existing = conn.execute(
+        text("SELECT id, status FROM casesheets WHERE consultation_id = :id"), {"id": consultation_id}
+    ).mappings().first()
 
     if existing:
         # If consultation is actively in progress or new turns were added, allow regenerating draft
         if existing["status"] == "approved_locked" and consultation.get("status") != "in_progress":
             conn.close()
             raise HTTPException(status_code=403, detail="Cannot regenerate: Case sheet is approved and locked. Load a new scenario or create a consultation to test.")
-        
-        cursor.execute("""
+
+        conn.execute(text("""
         UPDATE casesheets
-        SET updated_at = ?,
+        SET updated_at = :now,
             status = 'draft',
-            extraction_source = ?,
-            sections_json = ?,
-            multilingual_summary_json = ?,
-            approval_json = ?
-        WHERE id = ?
-        """, (now, source, json.dumps(sections), json.dumps(multilingual), json.dumps({"is_approved": False}), existing["id"]))
+            extraction_source = :source,
+            sections = :sections,
+            multilingual_summary = :multilingual,
+            approval = :approval
+        WHERE id = :id
+        """), {
+            "now": now, "source": source, "sections": json.dumps(sections),
+            "multilingual": json.dumps(multilingual),
+            "approval": json.dumps({"is_approved": False}), "id": existing["id"],
+        })
         cs_id = existing["id"]
     else:
-        cursor.execute("""
+        conn.execute(text("""
         INSERT INTO casesheets (
             id, consultation_id, patient_id, doctor_id, student_id, status,
-            created_at, updated_at, extraction_source, sections_json,
-            multilingual_summary_json, approval_json
-        ) VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?)
-        """, (
-            cs_id,
-            consultation_id,
-            consultation["patient_id"],
-            consultation["doctor_id"],
-            consultation.get("student_id"),
-            now,
-            now,
-            source,
-            json.dumps(sections),
-            json.dumps(multilingual),
-            json.dumps({"is_approved": False})
-        ))
+            created_at, updated_at, extraction_source, sections,
+            multilingual_summary, approval
+        ) VALUES (:id, :consultation_id, :patient_id, :doctor_id, :student_id, 'draft',
+                  :now, :now, :source, :sections, :multilingual, :approval)
+        """), {
+            "id": cs_id,
+            "consultation_id": consultation_id,
+            "patient_id": consultation["patient_id"],
+            "doctor_id": consultation["doctor_id"],
+            "student_id": consultation.get("student_id"),
+            "now": now,
+            "source": source,
+            "sections": json.dumps(sections),
+            "multilingual": json.dumps(multilingual),
+            "approval": json.dumps({"is_approved": False}),
+        })
         # Update consultation pointer
-        cursor.execute("UPDATE consultations SET case_sheet_id = ? WHERE id = ?", (cs_id, consultation_id))
+        conn.execute(
+            text("UPDATE consultations SET case_sheet_id = :cs_id WHERE id = :id"),
+            {"cs_id": cs_id, "id": consultation_id},
+        )
 
     conn.commit()
     conn.close()
@@ -173,10 +182,10 @@ def update_case_sheet(case_sheet_id: str, payload: Dict[str, Any] = Body(...)):
     Blocked if the record is approved_locked.
     """
     conn = get_db_connection()
-    cursor = conn.cursor()
 
-    cursor.execute("SELECT * FROM casesheets WHERE id = ?", (case_sheet_id,))
-    row = cursor.fetchone()
+    row = conn.execute(
+        text("SELECT * FROM casesheets WHERE id = :id"), {"id": case_sheet_id}
+    ).mappings().first()
     if not row:
         conn.close()
         raise HTTPException(status_code=404, detail="Case sheet not found")
@@ -192,12 +201,12 @@ def update_case_sheet(case_sheet_id: str, payload: Dict[str, Any] = Body(...)):
         raise HTTPException(status_code=400, detail="Missing 'sections' payload.")
 
     now = datetime.now().isoformat()
-    cursor.execute("""
+    conn.execute(text("""
     UPDATE casesheets
-    SET sections_json = ?,
-        updated_at = ?
-    WHERE id = ?
-    """, (json.dumps(sections), now, case_sheet_id))
+    SET sections = :sections,
+        updated_at = :now
+    WHERE id = :id
+    """), {"sections": json.dumps(sections), "now": now, "id": case_sheet_id})
 
     conn.commit()
     conn.close()
@@ -216,10 +225,10 @@ def doctor_approval_sign_off(
     computes immutable SHA-256 audit hash, and locks the record.
     """
     conn = get_db_connection()
-    cursor = conn.cursor()
 
-    cursor.execute("SELECT * FROM casesheets WHERE id = ?", (case_sheet_id,))
-    row = cursor.fetchone()
+    row = conn.execute(
+        text("SELECT * FROM casesheets WHERE id = :id"), {"id": case_sheet_id}
+    ).mappings().first()
     if not row:
         conn.close()
         raise HTTPException(status_code=404, detail="Case sheet not found")
@@ -230,15 +239,16 @@ def doctor_approval_sign_off(
         raise HTTPException(status_code=400, detail="Case sheet has already been approved and locked.")
 
     doctor_id = approval_data.get("doctor_id", current["doctor_id"])
-    cursor.execute("SELECT * FROM users WHERE id = ?", (doctor_id,))
-    doc_row = cursor.fetchone()
+    doc_row = conn.execute(
+        text("SELECT * FROM users WHERE id = :id"), {"id": doctor_id}
+    ).mappings().first()
     if not doc_row or doc_row["role"] != "doctor":
         conn.close()
         raise HTTPException(status_code=403, detail="Only certified Medical Doctors can approve and sign clinical records.")
 
     doc = dict(doc_row)
     now = datetime.now().isoformat()
-    sections = json.loads(current["sections_json"])
+    sections = current["sections"]
 
     # Compute cryptographic hash for audit compliance
     audit_hash = compute_approval_hash(case_sheet_id, doctor_id, sections, now)
@@ -256,16 +266,19 @@ def doctor_approval_sign_off(
         "immutable_hash": audit_hash
     }
 
-    cursor.execute("""
+    conn.execute(text("""
     UPDATE casesheets
     SET status = 'approved_locked',
-        approval_json = ?,
-        updated_at = ?
-    WHERE id = ?
-    """, (json.dumps(approval_payload), now, case_sheet_id))
+        approval = :approval,
+        updated_at = :now
+    WHERE id = :id
+    """), {"approval": json.dumps(approval_payload), "now": now, "id": case_sheet_id})
 
     # Also update consultation record
-    cursor.execute("UPDATE consultations SET is_approved = 1, status = 'completed' WHERE id = ?", (current["consultation_id"],))
+    conn.execute(
+        text("UPDATE consultations SET is_approved = 1, status = 'completed' WHERE id = :id"),
+        {"id": current["consultation_id"]},
+    )
 
     conn.commit()
     conn.close()
@@ -284,37 +297,36 @@ def print_case_sheet_view(case_sheet_id: str):
     patient identification bar, 17 distinct sections, medications table, and signature block.
     """
     conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-    SELECT cs.*,
-           p.first_name || ' ' || p.last_name as patient_name,
-           p.mrn as patient_mrn,
-           p.date_of_birth,
-           p.age as patient_age,
-           p.gender as patient_gender,
-           p.blood_group as patient_blood_group,
-           p.phone as patient_phone,
-           p.address as patient_address,
-           u.name as doctor_name,
-           u.registration_number as doctor_registration,
-           u.specialization as doctor_specialization,
-           s.name as student_name
-    FROM casesheets cs
-    JOIN patients p ON cs.patient_id = p.id
-    JOIN users u ON cs.doctor_id = u.id
-    LEFT JOIN users s ON cs.student_id = s.id
-    WHERE cs.id = ?
-    """, (case_sheet_id,))
-    row = cursor.fetchone()
-    conn.close()
+    try:
+        row = conn.execute(text("""
+        SELECT cs.*,
+               p.first_name || ' ' || p.last_name as patient_name,
+               p.mrn as patient_mrn,
+               p.date_of_birth,
+               p.age as patient_age,
+               p.gender as patient_gender,
+               p.blood_group as patient_blood_group,
+               p.phone as patient_phone,
+               p.address as patient_address,
+               u.name as doctor_name,
+               u.registration_number as doctor_registration,
+               u.specialization as doctor_specialization,
+               s.name as student_name
+        FROM casesheets cs
+        JOIN patients p ON cs.patient_id = p.id
+        JOIN users u ON cs.doctor_id = u.id
+        LEFT JOIN users s ON cs.student_id = s.id
+        WHERE cs.id = :id
+        """), {"id": case_sheet_id}).mappings().first()
+    finally:
+        conn.close()
 
     if not row:
         raise HTTPException(status_code=404, detail="Case sheet not found")
 
     d = dict(row)
-    sections = json.loads(d.get("sections_json") or "{}")
-    approval = json.loads(d.get("approval_json") or "{}")
+    sections = d.get("sections") or {}
+    approval = d.get("approval") or {}
     vitals = sections.get("vitals", {})
     meds = sections.get("medications", [])
 

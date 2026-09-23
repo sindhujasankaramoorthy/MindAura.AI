@@ -4,16 +4,15 @@ Handles patient directory, searching, validated registration with
 automatic date-of-birth to age calculation, and consultation history.
 """
 
-import json
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Query
+from sqlalchemy import text
 from backend.app.database import (
     get_patients,
     get_patient_by_id,
     create_patient,
     get_db_connection,
-    calculate_age,
-    get_patient_history
+    calculate_age
 )
 from backend.app.models import PatientCreate
 
@@ -63,58 +62,36 @@ def get_patient_consultations(patient_id: str):
         raise HTTPException(status_code=404, detail="Patient not found")
 
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-    SELECT c.*, u.name as doctor_name, u.specialization as doctor_specialization,
-           s.name as student_name
-    FROM consultations c
-    JOIN users u ON c.doctor_id = u.id
-    LEFT JOIN users s ON c.student_id = s.id
-    WHERE c.patient_id = ?
-    ORDER BY c.scheduled_time DESC
-    """, (patient_id,))
-    rows = cursor.fetchall()
-    conn.close()
+    try:
+        rows = conn.execute(text("""
+        SELECT c.*, u.name as doctor_name, u.specialization as doctor_specialization,
+               s.name as student_name
+        FROM consultations c
+        JOIN users u ON c.doctor_id = u.id
+        LEFT JOIN users s ON c.student_id = s.id
+        WHERE c.patient_id = :patient_id
+        ORDER BY c.scheduled_time DESC
+        """), {"patient_id": patient_id}).mappings().all()
+    finally:
+        conn.close()
 
-    results = []
-    for r in rows:
-        d = dict(r)
-        d["google_meet"] = json.loads(d.get("google_meet_json") or "{}")
-        results.append(d)
-    return results
-
-
-@router.get("/{patient_id}/history")
-def get_patient_ai_history(patient_id: str):
-    """Returns every modality's AI check-in history (text/voice/video) for
-    the doctor dashboard's timeline and trends view."""
-    patient = get_patient_by_id(patient_id)
-    if not patient:
-        raise HTTPException(status_code=404, detail="Patient not found")
-    return get_patient_history(patient_id)
+    return [dict(r) for r in rows]
 
 
 @router.get("/{patient_id}/casesheets")
 def get_patient_casesheets(patient_id: str):
     """Retrieves all generated clinical case sheets for this patient."""
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-    SELECT cs.*, c.scheduled_time, u.name as doctor_name
-    FROM casesheets cs
-    JOIN consultations c ON cs.consultation_id = c.id
-    JOIN users u ON cs.doctor_id = u.id
-    WHERE cs.patient_id = ?
-    ORDER BY cs.created_at DESC
-    """, (patient_id,))
-    rows = cursor.fetchall()
-    conn.close()
+    try:
+        rows = conn.execute(text("""
+        SELECT cs.*, c.scheduled_time, u.name as doctor_name
+        FROM casesheets cs
+        JOIN consultations c ON cs.consultation_id = c.id
+        JOIN users u ON cs.doctor_id = u.id
+        WHERE cs.patient_id = :patient_id
+        ORDER BY cs.created_at DESC
+        """), {"patient_id": patient_id}).mappings().all()
+    finally:
+        conn.close()
 
-    results = []
-    for r in rows:
-        d = dict(r)
-        d["sections"] = json.loads(d.get("sections_json") or "{}")
-        d["multilingual_summary"] = json.loads(d.get("multilingual_summary_json") or "{}")
-        d["approval"] = json.loads(d.get("approval_json") or "{}")
-        results.append(d)
-    return results
+    return [dict(r) for r in rows]

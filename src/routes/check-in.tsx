@@ -2,9 +2,11 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { CameraIcon, CheckIcon, LeafIcon, MicIcon, NotebookIcon } from "../components/icons";
 import { addCheckIn, formatDuration, type CheckInType } from "../lib/store";
-import { submitTextCheckIn, submitVoiceCheckIn, submitVideoCheckIn } from "../lib/api";
+import { submitTextCheckIn, submitVoiceCheckIn, submitVideoCheckIn, submitCheckInSession } from "../lib/api";
+import { requireAuth } from "../lib/auth";
 
 export const Route = createFileRoute("/check-in")({
+  beforeLoad: requireAuth,
   validateSearch: (search: Record<string, unknown>) => {
     const mode = search["mode"];
     return mode === "write" || mode === "speak" || mode === "video"
@@ -60,12 +62,11 @@ function CheckInFlow() {
     if (activityIndex < ordered.length - 1) {
       setActivityIndex((i) => i + 1);
     } else {
-      addCheckIn({
-        types: ordered,
-        text: payload?.text ?? text ?? undefined,
-        voiceSeconds: payload?.voice ?? voiceSeconds ?? undefined,
-        videoSeconds: payload?.video ?? videoSeconds ?? undefined,
-      });
+      const finalText = payload?.text ?? text ?? undefined;
+      const finalVoice = payload?.voice ?? voiceSeconds ?? undefined;
+      const finalVideo = payload?.video ?? videoSeconds ?? undefined;
+      addCheckIn({ types: ordered, text: finalText, voiceSeconds: finalVoice, videoSeconds: finalVideo });
+      void submitCheckInSession(ordered, finalText, finalVoice, finalVideo);
       setStep(3);
     }
   }
@@ -206,8 +207,36 @@ const prompts = [
   "What would you like to talk about?",
 ];
 
+type SubmitPhase = "idle" | "submitting" | "processing" | "error";
+
 function WriteStep({ initial, onDone }: { initial: string; onDone: (text: string) => void }) {
   const [value, setValue] = useState(initial);
+  const [phase, setPhase] = useState<SubmitPhase>("idle");
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit() {
+    if (!value.trim()) {
+      setError("Please write something before continuing.");
+      return;
+    }
+    setError(null);
+    setPhase("submitting");
+    const toProcessing = window.setTimeout(() => setPhase("processing"), 350);
+
+    const result = await submitTextCheckIn(value);
+    window.clearTimeout(toProcessing);
+
+    if (!result.ok) {
+      setPhase("error");
+      setError(result.error);
+      return;
+    }
+    onDone(value);
+  }
+
+  const busy = phase === "submitting" || phase === "processing";
+  const buttonLabel =
+    phase === "submitting" ? "Submitting..." : phase === "processing" ? "Processing..." : "Save & Continue";
 
   return (
     <section className="mt-10 animate-rise">
@@ -242,15 +271,15 @@ function WriteStep({ initial, onDone }: { initial: string; onDone: (text: string
         ))}
       </div>
 
+      {error ? <p className="mt-4 text-sm text-destructive">{error}</p> : null}
+
       <button
         type="button"
-        onClick={() => {
-          submitTextCheckIn(value);
-          onDone(value);
-        }}
-        className="btn-primary mt-8 w-full"
+        disabled={busy}
+        onClick={handleSubmit}
+        className="btn-primary mt-4 w-full disabled:opacity-60"
       >
-        Save &amp; Continue
+        {buttonLabel}
       </button>
     </section>
   );
@@ -270,6 +299,8 @@ function VoiceStep({ onDone }: { onDone: (seconds: number) => void }) {
   const [phase, setPhase] = useState<"idle" | "recording" | "paused" | "saved">("idle");
   const [seconds, setSeconds] = useTimer(phase === "recording");
   const [levels, setLevels] = useState<number[]>(Array.from({ length: 32 }, () => 0.15));
+  const [uploadPhase, setUploadPhase] = useState<SubmitPhase>("idle");
+  const [error, setError] = useState<string | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
@@ -335,6 +366,26 @@ function VoiceStep({ onDone }: { onDone: (seconds: number) => void }) {
     setPhase("saved");
   }
 
+  async function handleContinue() {
+    if (!blobRef.current) {
+      setError("No recording found. Please record again.");
+      return;
+    }
+    setError(null);
+    setUploadPhase("submitting");
+    const toProcessing = window.setTimeout(() => setUploadPhase("processing"), 350);
+
+    const result = await submitVoiceCheckIn(blobRef.current);
+    window.clearTimeout(toProcessing);
+
+    if (!result.ok) {
+      setUploadPhase("error");
+      setError(result.error);
+      return;
+    }
+    onDone(seconds);
+  }
+
   return (
     <section className="mt-10 animate-rise text-center">
       <h1 className="text-3xl text-primary-deep">Want to talk instead?</h1>
@@ -396,12 +447,15 @@ function VoiceStep({ onDone }: { onDone: (seconds: number) => void }) {
             <p className="inline-flex items-center gap-2 rounded-full bg-primary-soft px-5 py-2 text-sm text-primary-deep">
               <CheckIcon size={16} /> Your recording is saved.
             </p>
+            {error ? <p className="text-sm text-destructive">{error}</p> : null}
             <div className="flex flex-wrap justify-center gap-3">
               <button
                 type="button"
                 className="btn-ghost"
                 onClick={() => {
                   setSeconds(0);
+                  setError(null);
+                  setUploadPhase("idle");
                   setPhase("idle");
                 }}
               >
@@ -409,13 +463,15 @@ function VoiceStep({ onDone }: { onDone: (seconds: number) => void }) {
               </button>
               <button
                 type="button"
-                className="btn-primary"
-                onClick={() => {
-                  if (blobRef.current) submitVoiceCheckIn(blobRef.current);
-                  onDone(seconds);
-                }}
+                disabled={uploadPhase === "submitting" || uploadPhase === "processing"}
+                className="btn-primary disabled:opacity-60"
+                onClick={handleContinue}
               >
-                Continue
+                {uploadPhase === "submitting"
+                  ? "Uploading..."
+                  : uploadPhase === "processing"
+                    ? "Processing voice..."
+                    : "Continue"}
               </button>
             </div>
           </div>

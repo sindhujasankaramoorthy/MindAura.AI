@@ -8,6 +8,7 @@ import json
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, HTTPException, Query, Body
+from sqlalchemy import text
 from backend.app.database import get_db_connection, get_patient_by_id
 from backend.app.services.meet_service import (
     create_google_meet_session,
@@ -26,7 +27,6 @@ def list_consultations(
 ):
     """Lists all consultations with joined patient and doctor names."""
     conn = get_db_connection()
-    cursor = conn.cursor()
 
     query = """
     SELECT c.*,
@@ -44,27 +44,23 @@ def list_consultations(
     LEFT JOIN users s ON c.student_id = s.id
     WHERE 1=1
     """
-    params = []
+    params: Dict[str, Any] = {}
 
     if status:
-        query += " AND c.status = ?"
-        params.append(status)
+        query += " AND c.status = :status"
+        params["status"] = status
     if patient_id:
-        query += " AND c.patient_id = ?"
-        params.append(patient_id)
+        query += " AND c.patient_id = :patient_id"
+        params["patient_id"] = patient_id
 
     query += " ORDER BY c.scheduled_time DESC"
 
-    cursor.execute(query, params)
-    rows = cursor.fetchall()
-    conn.close()
+    try:
+        rows = conn.execute(text(query), params).mappings().all()
+    finally:
+        conn.close()
 
-    results = []
-    for r in rows:
-        d = dict(r)
-        d["google_meet"] = json.loads(d.get("google_meet_json") or "{}")
-        results.append(d)
-    return results
+    return [dict(r) for r in rows]
 
 
 @router.get("/scenarios/list")
@@ -77,47 +73,42 @@ def get_sample_scenarios():
 def get_consultation_details(consultation_id: str):
     """Retrieves single consultation details including full transcript history."""
     conn = get_db_connection()
-    cursor = conn.cursor()
+    try:
+        row = conn.execute(text("""
+        SELECT c.*,
+               p.first_name || ' ' || p.last_name as patient_name,
+               p.mrn as patient_mrn,
+               p.age as patient_age,
+               p.gender as patient_gender,
+               p.known_allergies,
+               p.chronic_conditions,
+               u.name as doctor_name,
+               u.specialization as doctor_specialization,
+               u.registration_number as doctor_registration,
+               s.name as student_name
+        FROM consultations c
+        JOIN patients p ON c.patient_id = p.id
+        JOIN users u ON c.doctor_id = u.id
+        LEFT JOIN users s ON c.student_id = s.id
+        WHERE c.id = :consultation_id
+        """), {"consultation_id": consultation_id}).mappings().first()
 
-    cursor.execute("""
-    SELECT c.*,
-           p.first_name || ' ' || p.last_name as patient_name,
-           p.mrn as patient_mrn,
-           p.age as patient_age,
-           p.gender as patient_gender,
-           p.known_allergies_json,
-           p.chronic_conditions_json,
-           u.name as doctor_name,
-           u.specialization as doctor_specialization,
-           u.registration_number as doctor_registration,
-           s.name as student_name
-    FROM consultations c
-    JOIN patients p ON c.patient_id = p.id
-    JOIN users u ON c.doctor_id = u.id
-    LEFT JOIN users s ON c.student_id = s.id
-    WHERE c.id = ?
-    """, (consultation_id,))
-    row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Consultation not found")
 
-    if not row:
+        consultation = dict(row)
+        consultation["patient_allergies"] = consultation.pop("known_allergies") or []
+        consultation["patient_chronic_conditions"] = consultation.pop("chronic_conditions") or []
+
+        turns = conn.execute(text("""
+        SELECT * FROM transcripts
+        WHERE consultation_id = :consultation_id
+        ORDER BY turn_order ASC
+        """), {"consultation_id": consultation_id}).mappings().all()
+    finally:
         conn.close()
-        raise HTTPException(status_code=404, detail="Consultation not found")
 
-    consultation = dict(row)
-    consultation["google_meet"] = json.loads(consultation.get("google_meet_json") or "{}")
-    consultation["patient_allergies"] = json.loads(consultation.get("known_allergies_json") or "[]")
-    consultation["patient_chronic_conditions"] = json.loads(consultation.get("chronic_conditions_json") or "[]")
-
-    # Fetch transcript turns
-    cursor.execute("""
-    SELECT * FROM transcripts
-    WHERE consultation_id = ?
-    ORDER BY turn_order ASC
-    """, (consultation_id,))
-    turns = [dict(t) for t in cursor.fetchall()]
-    conn.close()
-
-    consultation["transcripts"] = turns
+    consultation["transcripts"] = [dict(t) for t in turns]
     return consultation
 
 
@@ -140,23 +131,25 @@ def create_consultation(data: ConsultationCreate):
     meet_info = create_google_meet_session(consult_id, f"MedTrust Consultation: {patient_full_name}")
 
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-    INSERT INTO consultations (
-        id, patient_id, doctor_id, student_id, status, scheduled_time,
-        started_at, duration_seconds, google_meet_json, case_sheet_id, is_approved
-    ) VALUES (?, ?, ?, ?, 'scheduled', ?, ?, 0, ?, NULL, 0)
-    """, (
-        consult_id,
-        data.patient_id,
-        data.doctor_id,
-        data.student_id or "stu-1",
-        scheduled_time,
-        now,
-        json.dumps(meet_info)
-    ))
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(text("""
+        INSERT INTO consultations (
+            id, patient_id, doctor_id, student_id, status, scheduled_time,
+            started_at, duration_seconds, google_meet, case_sheet_id, is_approved
+        ) VALUES (:id, :patient_id, :doctor_id, :student_id, 'scheduled', :scheduled_time,
+                  :started_at, 0, :google_meet, NULL, 0)
+        """), {
+            "id": consult_id,
+            "patient_id": data.patient_id,
+            "doctor_id": data.doctor_id,
+            "student_id": data.student_id or "stu-1",
+            "scheduled_time": scheduled_time,
+            "started_at": now,
+            "google_meet": json.dumps(meet_info),
+        })
+        conn.commit()
+    finally:
+        conn.close()
 
     return get_consultation_details(consult_id)
 
@@ -165,18 +158,27 @@ def create_consultation(data: ConsultationCreate):
 def update_consultation_status(consultation_id: str, status: str = Body(..., embed=True)):
     """Updates the consultation status (e.g. in_progress, completed, paused)."""
     conn = get_db_connection()
-    cursor = conn.cursor()
-
     now = datetime.now().isoformat()
-    if status == "in_progress":
-        cursor.execute("UPDATE consultations SET status = ?, started_at = COALESCE(started_at, ?) WHERE id = ?", (status, now, consultation_id))
-    elif status == "completed":
-        cursor.execute("UPDATE consultations SET status = ?, ended_at = ? WHERE id = ?", (status, now, consultation_id))
-    else:
-        cursor.execute("UPDATE consultations SET status = ? WHERE id = ?", (status, consultation_id))
+    try:
+        if status == "in_progress":
+            conn.execute(
+                text("UPDATE consultations SET status = :status, started_at = COALESCE(started_at, :now) WHERE id = :id"),
+                {"status": status, "now": now, "id": consultation_id},
+            )
+        elif status == "completed":
+            conn.execute(
+                text("UPDATE consultations SET status = :status, ended_at = :now WHERE id = :id"),
+                {"status": status, "now": now, "id": consultation_id},
+            )
+        else:
+            conn.execute(
+                text("UPDATE consultations SET status = :status WHERE id = :id"),
+                {"status": status, "id": consultation_id},
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
-    conn.commit()
-    conn.close()
     return {"message": f"Status updated to {status}", "consultation_id": consultation_id}
 
 
@@ -187,34 +189,38 @@ def add_transcript_turn(consultation_id: str, turn: Dict[str, Any]):
     with normalized speaker diarization (doctor, student, patient).
     """
     conn = get_db_connection()
-    cursor = conn.cursor()
+    try:
+        max_order = conn.execute(
+            text("SELECT COALESCE(MAX(turn_order), 0) FROM transcripts WHERE consultation_id = :id"),
+            {"id": consultation_id},
+        ).scalar()
+        next_order = max_order + 1
+        turn_id = f"turn-{consultation_id}-{next_order}"
+        timestamp = turn.get("timestamp") or datetime.now().strftime("%H:%M:%S")
 
-    # Get max turn order
-    cursor.execute("SELECT COALESCE(MAX(turn_order), 0) FROM transcripts WHERE consultation_id = ?", (consultation_id,))
-    max_order = cursor.fetchone()[0]
-    next_order = max_order + 1
-    turn_id = f"turn-{consultation_id}-{next_order}"
-    timestamp = turn.get("timestamp") or datetime.now().strftime("%H:%M:%S")
+        conn.execute(text("""
+        INSERT INTO transcripts (
+            id, consultation_id, speaker, speaker_name, timestamp, text, confidence, turn_order
+        ) VALUES (:id, :consultation_id, :speaker, :speaker_name, :timestamp, :text, :confidence, :turn_order)
+        """), {
+            "id": turn_id,
+            "consultation_id": consultation_id,
+            "speaker": turn.get("speaker", "doctor"),
+            "speaker_name": turn.get("speaker_name", "Doctor"),
+            "timestamp": timestamp,
+            "text": turn.get("text", "").strip(),
+            "confidence": float(turn.get("confidence", 0.98)),
+            "turn_order": next_order,
+        })
 
-    cursor.execute("""
-    INSERT INTO transcripts (
-        id, consultation_id, speaker, speaker_name, timestamp, text, confidence, turn_order
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        turn_id,
-        consultation_id,
-        turn.get("speaker", "doctor"),
-        turn.get("speaker_name", "Doctor"),
-        timestamp,
-        turn.get("text", "").strip(),
-        float(turn.get("confidence", 0.98)),
-        next_order
-    ))
-
-    # Also transition consultation to in_progress if currently scheduled
-    cursor.execute("UPDATE consultations SET status = 'in_progress' WHERE id = ? AND status = 'scheduled'", (consultation_id,))
-    conn.commit()
-    conn.close()
+        # Also transition consultation to in_progress if currently scheduled
+        conn.execute(
+            text("UPDATE consultations SET status = 'in_progress' WHERE id = :id AND status = 'scheduled'"),
+            {"id": consultation_id},
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
     return {
         "id": turn_id,
@@ -232,40 +238,42 @@ def load_scenario_into_consultation(consultation_id: str, scenario_key: str):
     """
     scenario = get_scenario(scenario_key)
     conn = get_db_connection()
-    cursor = conn.cursor()
+    try:
+        # Clear existing transcripts for a clean demo
+        conn.execute(text("DELETE FROM transcripts WHERE consultation_id = :id"), {"id": consultation_id})
 
-    # Clear existing transcripts for a clean demo
-    cursor.execute("DELETE FROM transcripts WHERE consultation_id = ?", (consultation_id,))
+        for idx, turn in enumerate(scenario["turns"], 1):
+            conn.execute(text("""
+            INSERT INTO transcripts (
+                id, consultation_id, speaker, speaker_name, timestamp, text, confidence, turn_order
+            ) VALUES (:id, :consultation_id, :speaker, :speaker_name, :timestamp, :text, :confidence, :turn_order)
+            """), {
+                "id": f"turn-{consultation_id}-{idx}",
+                "consultation_id": consultation_id,
+                "speaker": turn["speaker"],
+                "speaker_name": turn["speaker_name"],
+                "timestamp": turn["timestamp"],
+                "text": turn["text"],
+                "confidence": 0.99,
+                "turn_order": idx,
+            })
 
-    turns_to_insert = []
-    for idx, turn in enumerate(scenario["turns"], 1):
-        t_id = f"turn-{consultation_id}-{idx}"
-        turns_to_insert.append((
-            t_id,
-            consultation_id,
-            turn["speaker"],
-            turn["speaker_name"],
-            turn["timestamp"],
-            turn["text"],
-            0.99,
-            idx
-        ))
-
-    cursor.executemany("""
-    INSERT INTO transcripts (
-        id, consultation_id, speaker, speaker_name, timestamp, text, confidence, turn_order
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, turns_to_insert)
-
-    cursor.execute("UPDATE consultations SET status = 'in_progress', duration_seconds = 145, is_approved = 0 WHERE id = ?", (consultation_id,))
-    # Reset any existing case sheet for this consultation back to draft so user can test generation
-    cursor.execute("UPDATE casesheets SET status = 'draft', approval_json = ? WHERE consultation_id = ?", (json.dumps({"is_approved": False}), consultation_id))
-    conn.commit()
-    conn.close()
+        conn.execute(
+            text("UPDATE consultations SET status = 'in_progress', duration_seconds = 145, is_approved = 0 WHERE id = :id"),
+            {"id": consultation_id},
+        )
+        # Reset any existing case sheet for this consultation back to draft so user can test generation
+        conn.execute(
+            text("UPDATE casesheets SET status = 'draft', approval = :approval WHERE consultation_id = :id"),
+            {"approval": json.dumps({"is_approved": False}), "id": consultation_id},
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
     return {
         "message": f"Successfully loaded scenario '{scenario['title']}'",
-        "turn_count": len(turns_to_insert),
+        "turn_count": len(scenario["turns"]),
         "scenario": scenario
     }
 
@@ -278,26 +286,27 @@ def get_google_meet_transcripts_endpoint(space_id: str):
     https://developers.google.com/meet/api/reference/rest/v2/spaces.transcripts
     """
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-    SELECT c.id, c.google_meet_json
-    FROM consultations c
-    WHERE c.google_meet_json LIKE ?
-    """, (f"%{space_id}%",))
-    row = cursor.fetchone()
+    try:
+        row = conn.execute(text("""
+        SELECT c.id, c.google_meet
+        FROM consultations c
+        WHERE c.google_meet::text LIKE :pattern
+        """), {"pattern": f"%{space_id}%"}).mappings().first()
 
-    if not row:
+        if not row:
+            return {
+                "name": f"spaces/{space_id}/transcripts",
+                "transcripts": [],
+                "state": "ACTIVE"
+            }
+
+        consult_id = row["id"]
+        turns = conn.execute(
+            text("SELECT * FROM transcripts WHERE consultation_id = :id ORDER BY turn_order ASC"),
+            {"id": consult_id},
+        ).mappings().all()
+    finally:
         conn.close()
-        return {
-            "name": f"spaces/{space_id}/transcripts",
-            "transcripts": [],
-            "state": "ACTIVE"
-        }
-
-    consult_id = row[0]
-    cursor.execute("SELECT * FROM transcripts WHERE consultation_id = ? ORDER BY turn_order ASC", (consult_id,))
-    turns = [dict(t) for t in cursor.fetchall()]
-    conn.close()
 
     formatted_entries = [
         {

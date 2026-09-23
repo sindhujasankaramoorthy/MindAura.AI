@@ -1,9 +1,12 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 import { LeafIcon } from "../components/icons";
 import { useStore } from "../lib/store";
+import { getStoredPatient, logoutPatient, requireAuth } from "../lib/auth";
+import { fetchPreferences, updatePreferences } from "../lib/api";
 
 export const Route = createFileRoute("/profile")({
+  beforeLoad: requireAuth,
   head: () => ({
     meta: [
       { title: "Profile — MindAura AI" },
@@ -19,20 +22,49 @@ export const Route = createFileRoute("/profile")({
 });
 
 function Profile() {
+  const navigate = useNavigate();
   const { checkins, practicesDone } = useStore();
   const [reminders, setReminders] = useState(true);
   const [practiceNudge, setPracticeNudge] = useState(false);
+  const patient = getStoredPatient();
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchPreferences().then((prefs) => {
+      if (cancelled || !prefs) return;
+      setReminders(prefs.daily_checkin_reminder);
+      setPracticeNudge(prefs.practice_reminders);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function handleRemindersChange(value: boolean) {
+    setReminders(value);
+    void updatePreferences({ daily_checkin_reminder: value });
+  }
+
+  function handlePracticeNudgeChange(value: boolean) {
+    setPracticeNudge(value);
+    void updatePreferences({ practice_reminders: value });
+  }
+
+  async function handleSignOut() {
+    await logoutPatient();
+    await navigate({ to: "/login" });
+  }
 
   return (
     <div className="mx-auto max-w-3xl space-y-8">
       <section className="card-soft flex flex-wrap items-center gap-6 p-8 animate-rise">
         <span className="relative flex h-20 w-20 items-center justify-center rounded-full bg-lavender-soft font-display text-2xl text-primary-deep">
           <span className="absolute inset-[-6px] rounded-full border border-primary/20 animate-ripple" />
-          S
+          {(patient?.name ?? "?").charAt(0).toUpperCase()}
         </span>
         <div>
-          <h1 className="text-2xl text-primary-deep">Sindhuja</h1>
-          <p className="text-sm text-muted-foreground">sindhuja@example.com</p>
+          <h1 className="text-2xl text-primary-deep">{patient?.name ?? "Unknown"}</h1>
+          <p className="text-sm text-muted-foreground">{patient?.email ?? ""}</p>
           <p className="mt-2 text-xs text-muted-foreground">
             {checkins.length} check-ins · {practicesDone.length} practices completed
           </p>
@@ -46,13 +78,13 @@ function Profile() {
             label="Daily check-in reminder"
             hint="A gentle nudge at a time that suits you."
             on={reminders}
-            onChange={setReminders}
+            onChange={handleRemindersChange}
           />
           <Toggle
             label="Practice reminders"
             hint="Occasional reminders for your assigned practices."
             on={practiceNudge}
-            onChange={setPracticeNudge}
+            onChange={handlePracticeNudgeChange}
           />
         </div>
       </section>
@@ -70,7 +102,7 @@ function Profile() {
       </section>
 
       <section className="card-soft divide-y divide-border p-2 animate-fade">
-        {["Privacy policy", "Notification settings", "Help & support", "Sign out"].map((item) => (
+        {["Privacy policy", "Notification settings", "Help & support"].map((item) => (
           <button
             key={item}
             type="button"
@@ -80,6 +112,14 @@ function Profile() {
             <span className="text-muted-foreground">›</span>
           </button>
         ))}
+        <button
+          type="button"
+          onClick={handleSignOut}
+          className="flex w-full items-center justify-between rounded-2xl px-6 py-4 text-left text-sm text-destructive transition-colors duration-300 hover:bg-secondary"
+        >
+          Sign out
+          <span className="text-muted-foreground">›</span>
+        </button>
       </section>
     </div>
   );

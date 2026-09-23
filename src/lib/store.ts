@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getStoredPatient } from "./auth";
 
 export type CheckInType = "write" | "speak" | "video";
 
@@ -16,7 +17,13 @@ export type StoreState = {
   practicesDone: string[];
 };
 
-const KEY = "mindaura.patient.v1";
+// Namespaced per logged-in patient -- a shared, unscoped key here meant
+// any patient logging into the same browser saw whatever local check-in/
+// practice history the previous patient had left behind.
+function storageKey(): string {
+  const patient = getStoredPatient();
+  return `mindaura.patient.v1.${patient?.id ?? "anonymous"}`;
+}
 
 const seed: StoreState = {
   checkins: [],
@@ -24,7 +31,7 @@ const seed: StoreState = {
 };
 
 let state: StoreState = seed;
-let hydrated = false;
+let hydratedKey: string | null = null;
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -32,10 +39,13 @@ function emit() {
 }
 
 function hydrate() {
-  if (hydrated || typeof window === "undefined") return;
-  hydrated = true;
+  if (typeof window === "undefined") return;
+  const key = storageKey();
+  if (hydratedKey === key) return;
+  hydratedKey = key;
+  state = seed;
   try {
-    const raw = window.localStorage.getItem(KEY);
+    const raw = window.localStorage.getItem(key);
     if (raw) state = { ...seed, ...(JSON.parse(raw) as StoreState) };
   } catch {
     /* ignore */
@@ -46,7 +56,7 @@ function hydrate() {
 function persist() {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(KEY, JSON.stringify(state));
+    window.localStorage.setItem(storageKey(), JSON.stringify(state));
   } catch {
     /* ignore */
   }
@@ -67,6 +77,7 @@ export function useStore(): StoreState {
 }
 
 export function addCheckIn(entry: Omit<CheckIn, "id" | "createdAt">) {
+  hydrate();
   state = {
     ...state,
     checkins: [
@@ -79,6 +90,7 @@ export function addCheckIn(entry: Omit<CheckIn, "id" | "createdAt">) {
 }
 
 export function togglePracticeDone(id: string) {
+  hydrate();
   const done = state.practicesDone.includes(id)
     ? state.practicesDone.filter((p) => p !== id)
     : [...state.practicesDone, id];

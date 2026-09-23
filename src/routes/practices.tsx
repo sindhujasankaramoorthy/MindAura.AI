@@ -2,8 +2,11 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { CheckIcon, ClockIcon, LeafIcon, SparkIcon } from "../components/icons";
 import { formatDuration, togglePracticeDone, useStore } from "../lib/store";
+import { requireAuth } from "../lib/auth";
+import { submitPracticeCompletion } from "../lib/api";
 
 export const Route = createFileRoute("/practices")({
+  beforeLoad: requireAuth,
   head: () => ({
     meta: [
       { title: "Your Practices — MindAura AI" },
@@ -76,8 +79,9 @@ function Practices() {
       <PracticeSession
         practice={active}
         onExit={() => setActive(null)}
-        onComplete={() => {
+        onComplete={(note) => {
           if (!practicesDone.includes(active.id)) togglePracticeDone(active.id);
+          void submitPracticeCompletion(active.id, note);
         }}
       />
     );
@@ -146,7 +150,7 @@ function PracticeSession({
 }: {
   practice: Practice;
   onExit: () => void;
-  onComplete: () => void;
+  onComplete: (note?: string) => void;
 }) {
   const total = practice.minutes * 60;
   const [elapsed, setElapsed] = useState(0);
@@ -161,7 +165,7 @@ function PracticeSession({
   }, [running, finished]);
 
   useEffect(() => {
-    if (finished) onComplete();
+    if (finished) onComplete(note.trim() ? note.trim() : undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [finished]);
 
